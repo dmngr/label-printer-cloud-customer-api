@@ -1,15 +1,21 @@
 /**
  * `customerApi` Lambda handler — read-only customer-facing API.
  *
- * Single Function URL Lambda that routes internally between three GET paths:
+ * Single Function URL Lambda that routes internally between these GET paths:
  *
- *   GET /api/v1/me/stores                  -> stores summary (device counts + online counts)
- *   GET /api/v1/me/devices                 -> flat list of devices, grouped by storeId
- *   GET /api/v1/me/devices/{deviceCode}    -> single-device detail
+ *   GET /api/v1/me/stores                              -> stores summary (device counts + online counts)
+ *   GET /api/v1/me/devices                             -> flat list of devices, grouped by storeId
+ *   GET /api/v1/me/devices/{deviceCode}                -> single-device detail
+ *   GET /api/v1/me/devices/{deviceCode}/products       -> catalog products mirror
+ *   GET /api/v1/me/devices/{deviceCode}/templates      -> catalog templates mirror
+ *   GET /api/v1/me/devices/{deviceCode}/jobs?limit=&cursor=  -> recent print jobs (descending)
  *
  * Auth is strict: every non-OPTIONS request MUST present a customer bearer
  * (`Authorization: Bearer <token>`) that resolves to a row in the
  * `DMLabelPrinterCloudCustomerTokens` table by sha256 hex of the bearer.
+ * The `/devices/{code}` subroutes additionally verify the device's `Group`
+ * is in the caller's authorized stores list — same enforcement the existing
+ * device-detail route applies (404 device_not_found / 403 forbidden_store).
  */
 
 // Module-level idempotent BigInt.prototype.toJSON shim — mandatory per
@@ -43,10 +49,13 @@ import {
 } from "../lib/handled-errors";
 import { DynamoCustomerApiStore } from "../storage/dynamo-store";
 import type {
+  CatalogProductsResponse,
+  CatalogTemplatesResponse,
   DeviceDetail,
   DeviceRecord,
   DeviceSummary,
   DevicesResponse,
+  PrintJobsResponse,
   StoreDevicesGroup,
   StoreSummary,
   StoresResponse
@@ -55,6 +64,12 @@ import type {
 const STORES_PATH = "/api/v1/me/stores";
 const DEVICES_PATH = "/api/v1/me/devices";
 const DEVICE_DETAIL_PREFIX = "/api/v1/me/devices/";
+const DEVICE_PRODUCTS_SUFFIX = "/products";
+const DEVICE_TEMPLATES_SUFFIX = "/templates";
+const DEVICE_JOBS_SUFFIX = "/jobs";
+
+const DEFAULT_JOBS_LIMIT = 50;
+const MAX_JOBS_LIMIT = 200;
 
 function getMethod(event: LambdaFunctionURLEvent): string {
   return event.requestContext?.http?.method ?? "";
@@ -90,6 +105,50 @@ interface AuthFailure {
 }
 
 type AuthOutcome = { kind: "ok"; caller: AuthorizedCaller } | { kind: "fail"; failure: AuthFailure };
+
+type EnsureDeviceOutcome =
+  | { kind: "ok"; record: DeviceRecord }
+  | { kind: "fail"; response: LambdaResponse; errorCode: string };
+
+/**
+ * Resolve a device by code and verify its `Group` is in the caller's
+ * authorized stores list. Mirrors the logic the original device-detail route
+ * already had inline (404 → device_not_found, 403 → forbidden_store) so the
+ * three new subroutes share the exact same auth surface.
+ */
+async function ensureAuthorizedDevice(
+  store: DynamoCustomerApiStore,
+  storeIds: ReadonlyArray<string>,
+  deviceCode: string
+): Promise<EnsureDeviceOutcome> {
+  if (deviceCode.length === 0) {
+    return {
+      kind: "fail",
+      response: textResponse(404, "Not found"),
+      errorCode: "customer_api_device_not_found"
+    };
+  }
+
+  const record = await store.getDevice(deviceCode);
+  if (record === null) {
+    return {
+      kind: "fail",
+      response: textResponse(404, "Device not found"),
+      errorCode: "customer_api_device_not_found"
+    };
+  }
+
+  const deviceStoreId = record.storeId.trim();
+  if (deviceStoreId.length === 0 || !storeIds.includes(deviceStoreId)) {
+    return {
+      kind: "fail",
+      response: textResponse(403, "Forbidden"),
+      errorCode: "customer_api_forbidden_store"
+    };
+  }
+
+  return { kind: "ok", record };
+}
 
 async function authorizeRequest(
   event: LambdaFunctionURLEvent,
@@ -247,6 +306,115 @@ function tryParseDeviceDetailPath(rawPath: string): string | null {
   }
 }
 
+type DeviceSubrouteKind = "products" | "templates" | "jobs";
+
+interface DeviceSubrouteMatch {
+  kind: DeviceSubrouteKind;
+  deviceCode: string;
+}
+
+/**
+ * Parses `/api/v1/me/devices/{deviceCode}/{products|templates|jobs}`. Returns
+ * `null` for any other shape (the caller falls back to the single-device
+ * detail route or a 404). DeviceCode is URL-decoded with the same defensive
+ * try/catch as the detail-route parser.
+ */
+function tryParseDeviceSubroutePath(rawPath: string): DeviceSubrouteMatch | null {
+  const normalized = normalizePath(rawPath);
+  if (!normalized.toLowerCase().startsWith(DEVICE_DETAIL_PREFIX.toLowerCase())) return null;
+  const remainder = normalized.slice(DEVICE_DETAIL_PREFIX.length);
+  if (remainder.length === 0) return null;
+
+  const slashIdx = remainder.indexOf("/");
+  if (slashIdx <= 0) return null;
+
+  const rawDeviceCode = remainder.slice(0, slashIdx);
+  const rest = remainder.slice(slashIdx); // includes leading "/"
+
+  let kind: DeviceSubrouteKind | null = null;
+  const lower = rest.toLowerCase();
+  if (lower === DEVICE_PRODUCTS_SUFFIX) kind = "products";
+  else if (lower === DEVICE_TEMPLATES_SUFFIX) kind = "templates";
+  else if (lower === DEVICE_JOBS_SUFFIX) kind = "jobs";
+  if (kind === null) return null;
+
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawDeviceCode).trim();
+  } catch {
+    decoded = rawDeviceCode.trim();
+  }
+  if (decoded.length === 0) return null;
+
+  return { kind, deviceCode: decoded };
+}
+
+interface ParsedJobsQuery {
+  limit: number;
+  cursor: Record<string, unknown> | undefined;
+}
+
+/**
+ * Parse `?limit=N&cursor=...` for `/jobs`. Returns a `CustomError` with code
+ * `customer_api_invalid_query_param` for any unparseable / out-of-range value
+ * — the caller turns that into a 400 with the policy-tracked code.
+ */
+function parseJobsQuery(rawQuery: Record<string, string | undefined> | undefined): ParsedJobsQuery {
+  const params = rawQuery ?? {};
+
+  let limit = DEFAULT_JOBS_LIMIT;
+  const limitRaw = params["limit"];
+  if (typeof limitRaw === "string" && limitRaw.trim().length > 0) {
+    if (!/^\d+$/.test(limitRaw.trim())) {
+      throw new CustomError("customer_api_invalid_query_param");
+    }
+    const parsed = Number.parseInt(limitRaw.trim(), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0 || parsed > MAX_JOBS_LIMIT) {
+      throw new CustomError("customer_api_invalid_query_param");
+    }
+    limit = parsed;
+  }
+
+  let cursor: Record<string, unknown> | undefined;
+  const cursorRaw = params["cursor"];
+  if (typeof cursorRaw === "string" && cursorRaw.trim().length > 0) {
+    try {
+      const decoded = decodeCursor(cursorRaw.trim());
+      cursor = decoded;
+    } catch {
+      throw new CustomError("customer_api_invalid_query_param");
+    }
+  }
+
+  return { limit, cursor };
+}
+
+/**
+ * Cursors are base64url-encoded JSON of the DynamoDB `LastEvaluatedKey`
+ * (a small AttributeValue map). We deliberately don't hide the structure:
+ * the web app treats it as opaque, but this format is forward-compatible if
+ * we ever add a server-side HMAC.
+ */
+function encodeCursor(key: Record<string, unknown>): string {
+  const json = JSON.stringify(key);
+  return Buffer.from(json, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function decodeCursor(encoded: string): Record<string, unknown> {
+  const padded = encoded.replace(/-/g, "+").replace(/_/g, "/");
+  const padLen = (4 - (padded.length % 4)) % 4;
+  const json = Buffer.from(padded + "=".repeat(padLen), "base64").toString("utf8");
+  const parsed = JSON.parse(json) as unknown;
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("cursor is not an object");
+  }
+  return parsed as Record<string, unknown>;
+}
+
 function isStoresPath(rawPath: string): boolean {
   return normalizePath(rawPath).toLowerCase() === STORES_PATH;
 }
@@ -303,30 +471,65 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
       return jsonResponse(200, payload);
     }
 
+    const subroute = tryParseDeviceSubroutePath(rawPath);
+    if (subroute !== null) {
+      const authResult = await ensureAuthorizedDevice(store, auth.caller.storeIds, subroute.deviceCode);
+      if (authResult.kind === "fail") {
+        logHandledErrorAction(authResult.errorCode, shouldSuppress(authResult.errorCode));
+        return authResult.response;
+      }
+
+      if (subroute.kind === "products") {
+        const items = await store.queryProductsByDeviceCode(subroute.deviceCode);
+        const payload: CatalogProductsResponse = { items };
+        console.log("RequestId SUCCESS");
+        return jsonResponse(200, payload);
+      }
+
+      if (subroute.kind === "templates") {
+        const items = await store.queryTemplatesByDeviceCode(subroute.deviceCode);
+        const payload: CatalogTemplatesResponse = { items };
+        console.log("RequestId SUCCESS");
+        return jsonResponse(200, payload);
+      }
+
+      // jobs
+      let parsed: ParsedJobsQuery;
+      try {
+        parsed = parseJobsQuery(fnEvent.queryStringParameters);
+      } catch (err) {
+        if (err instanceof CustomError) {
+          logHandledErrorAction(err.code, shouldSuppress(err.code));
+          return textResponse(400, "Invalid query parameter");
+        }
+        throw err;
+      }
+
+      const result = await store.queryPrintJobsByDevice(
+        subroute.deviceCode,
+        parsed.limit,
+        parsed.cursor as never
+      );
+      const payload: PrintJobsResponse = {
+        items: result.items,
+        nextCursor: result.nextCursor !== undefined ? encodeCursor(result.nextCursor) : null
+      };
+      console.log("RequestId SUCCESS");
+      return jsonResponse(200, payload);
+    }
+
     const deviceCode = tryParseDeviceDetailPath(rawPath);
     if (deviceCode !== null) {
-      if (deviceCode.length === 0) {
-        return textResponse(404, "Not found");
+      const authResult = await ensureAuthorizedDevice(store, auth.caller.storeIds, deviceCode);
+      if (authResult.kind === "fail") {
+        logHandledErrorAction(authResult.errorCode, shouldSuppress(authResult.errorCode));
+        return authResult.response;
       }
 
-      const record = await store.getDevice(deviceCode);
-      if (record === null) {
-        const errorCode = "customer_api_device_not_found";
-        logHandledErrorAction(errorCode, shouldSuppress(errorCode));
-        return textResponse(404, "Device not found");
-      }
-
-      const deviceStoreId = record.storeId.trim();
-      if (deviceStoreId.length === 0 || !auth.caller.storeIds.includes(deviceStoreId)) {
-        const errorCode = "customer_api_forbidden_store";
-        logHandledErrorAction(errorCode, shouldSuppress(errorCode));
-        return textResponse(403, "Forbidden");
-      }
-
-      const summary = toDeviceSummary(record, options, nowMs);
+      const summary = toDeviceSummary(authResult.record, options, nowMs);
       const detail: DeviceDetail = {
         ...summary,
-        storeId: deviceStoreId
+        storeId: authResult.record.storeId.trim()
       };
       console.log("RequestId SUCCESS");
       return jsonResponse(200, detail);

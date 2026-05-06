@@ -27,6 +27,10 @@
     "customer_api_forbidden_store": {
       "emit_requestid_success": false,
       "notes": "Device exists but its Group is not in the caller token's StoreIds (HTTP 403)."
+    },
+    "customer_api_invalid_query_param": {
+      "emit_requestid_success": false,
+      "notes": "Caller-supplied query string parameter (limit / cursor on /jobs) is missing-shape, out-of-range, or unparseable (HTTP 400)."
     }
   }
 }

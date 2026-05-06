@@ -55,3 +55,60 @@ export interface StoreDevicesGroup {
 export interface DevicesResponse {
   stores: StoreDevicesGroup[];
 }
+
+/**
+ * Catalog product item — projection of `DMLabelPrinterCloudCatalogProducts`
+ * rows surfaced to the customer-facing web app.
+ *
+ * Optional fields are omitted when absent on the record (per spec). `priceCents`
+ * is computed by multiplying the stored decimal `Price` by 100 (rounded).
+ */
+export interface CatalogProductItem {
+  id: number;
+  code: string;
+  name: string;
+  categoryName?: string;
+  priceCents?: number;
+  updatedAtUtc?: string;
+}
+
+export interface CatalogProductsResponse {
+  items: CatalogProductItem[];
+}
+
+/**
+ * Catalog template item — projection of `DMLabelPrinterCloudCatalogTemplates`
+ * rows surfaced to the customer-facing web app.
+ */
+export interface CatalogTemplateItem {
+  id: number;
+  code: string;
+  name: string;
+  updatedAtUtc?: string;
+}
+
+export interface CatalogTemplatesResponse {
+  items: CatalogTemplateItem[];
+}
+
+/**
+ * Print-job item — projection of `DMLabelPrinterCloudPrintJobs` rows.
+ *
+ * Per spec, `completedAtUtc` and `errorMessage` are written as `null` when
+ * absent on the record (nullable in the wire schema). Other optional fields
+ * are omitted when absent.
+ */
+export interface PrintJobItem {
+  id: number;
+  createdAtUtc: string;
+  completedAtUtc: string | null;
+  status: string;
+  templateCode?: string;
+  errorMessage: string | null;
+  labelCount: number;
+}
+
+export interface PrintJobsResponse {
+  items: PrintJobItem[];
+  nextCursor: string | null;
+}

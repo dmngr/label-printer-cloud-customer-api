@@ -118,7 +118,8 @@ test("custom_errors.policy.json declares all customer_api_* codes used by the ha
     "customer_api_token_not_found",
     "customer_api_token_no_stores",
     "customer_api_device_not_found",
-    "customer_api_forbidden_store"
+    "customer_api_forbidden_store",
+    "customer_api_invalid_query_param"
   ];
   for (const code of required) {
     assert.ok(declared.includes(code), `missing handled-error code in policy: ${code}`);

@@ -14,7 +14,20 @@
  */
 
 import type { CustomerApiOptions } from "../config";
-import type { CustomerTokenRecord, DeviceRecord } from "../types";
+import type {
+  CatalogProductItem,
+  CatalogTemplateItem,
+  CustomerTokenRecord,
+  DeviceRecord,
+  PrintJobItem
+} from "../types";
+
+/**
+ * Hard upper bound for the transparent paging loop on products / templates.
+ * Catalogs are small (typical device < 200 items); we follow LastEvaluatedKey
+ * up to this many items to keep behaviour predictable for outliers.
+ */
+const CATALOG_PAGE_LIMIT = 1000;
 
 // AWS SDK v3 is runtime-included on Node 18+ Lambda runtimes (Phase 4 hygiene:
 // nothing pinned in `package.json`). We require it at runtime and declare just
@@ -24,6 +37,7 @@ interface AttributeValue {
   S?: string;
   N?: string;
   SS?: string[];
+  BOOL?: boolean;
 }
 
 interface GetItemInput {
@@ -63,6 +77,23 @@ interface ScanOutput {
   LastEvaluatedKey?: Record<string, AttributeValue>;
 }
 
+interface QueryInput {
+  TableName: string;
+  IndexName?: string;
+  KeyConditionExpression: string;
+  ProjectionExpression?: string;
+  ExpressionAttributeNames?: Record<string, string>;
+  ExpressionAttributeValues: Record<string, AttributeValue>;
+  ScanIndexForward?: boolean;
+  Limit?: number;
+  ExclusiveStartKey?: Record<string, AttributeValue>;
+}
+
+interface QueryOutput {
+  Items?: Record<string, AttributeValue>[];
+  LastEvaluatedKey?: Record<string, AttributeValue>;
+}
+
 interface DynamoCommand<TInput, TOutput> {
   readonly input: TInput;
   readonly __out__?: TOutput;
@@ -81,11 +112,12 @@ interface DynamoSdkModule {
   GetItemCommand: DynamoCommandCtor<GetItemInput, GetItemOutput>;
   UpdateItemCommand: DynamoCommandCtor<UpdateItemInput, UpdateItemOutput>;
   ScanCommand: DynamoCommandCtor<ScanInput, ScanOutput>;
+  QueryCommand: DynamoCommandCtor<QueryInput, QueryOutput>;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const sdk: DynamoSdkModule = require("@aws-sdk/client-dynamodb") as DynamoSdkModule;
-const { DynamoDBClient, GetItemCommand, UpdateItemCommand, ScanCommand } = sdk;
+const { DynamoDBClient, GetItemCommand, UpdateItemCommand, ScanCommand, QueryCommand } = sdk;
 
 /**
  * Module-scoped client so successive invocations on a warm container reuse
@@ -110,6 +142,57 @@ function readNumber(item: Record<string, AttributeValue> | undefined, key: strin
   if (!attr || typeof attr.N !== "string") return 0;
   const parsed = Number.parseInt(attr.N, 10);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * Read a present-only string from an Item, returning `undefined` when the
+ * attribute is missing or empty (so callers can omit the field from the
+ * response payload per the wire spec).
+ */
+function readOptionalString(
+  item: Record<string, AttributeValue> | undefined,
+  key: string
+): string | undefined {
+  if (!item) return undefined;
+  const attr = item[key];
+  if (!attr || typeof attr.S !== "string" || attr.S.length === 0) return undefined;
+  return attr.S;
+}
+
+/**
+ * Read a present-only string, returning `null` when the attribute is missing
+ * or blank. Used for fields where the wire schema explicitly allows `null`.
+ */
+function readNullableString(
+  item: Record<string, AttributeValue> | undefined,
+  key: string
+): string | null {
+  if (!item) return null;
+  const attr = item[key];
+  if (!attr || typeof attr.S !== "string" || attr.S.length === 0) return null;
+  return attr.S;
+}
+
+/**
+ * Read a decimal-N attribute and convert to integer cents. Returns `undefined`
+ * when the attribute is missing or unparseable. We don't use floating-point
+ * multiplication — the attribute string is parsed manually so values like
+ * "2.5" round to 250 deterministically.
+ */
+function readPriceAsCents(
+  item: Record<string, AttributeValue> | undefined,
+  key: string
+): number | undefined {
+  if (!item) return undefined;
+  const attr = item[key];
+  if (!attr || typeof attr.N !== "string" || attr.N.length === 0) return undefined;
+  const trimmed = attr.N.trim();
+  if (trimmed.length === 0) return undefined;
+  // Treat negative prices and NaN as missing — a malformed entry is safer to
+  // omit than to surface as a confusing negative value to the web app.
+  const parsed = Number.parseFloat(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  return Math.round(parsed * 100);
 }
 
 export class DynamoCustomerApiStore {
@@ -244,4 +327,138 @@ export class DynamoCustomerApiStore {
       failedJobs: readNumber(item, "FailedJobs")
     };
   }
+
+  /**
+   * Query the catalog-products GSI by `DeviceCode`, transparently following
+   * `LastEvaluatedKey` up to `CATALOG_PAGE_LIMIT` items total. Catalogs are
+   * small in Phase 1 — the spec does not surface pagination here.
+   */
+  async queryProductsByDeviceCode(deviceCode: string): Promise<CatalogProductItem[]> {
+    return this.queryCatalogByDeviceCode(
+      this.options.catalogProductsTableName,
+      deviceCode,
+      toProductItem
+    );
+  }
+
+  /**
+   * Query the catalog-templates GSI by `DeviceCode`, transparently following
+   * `LastEvaluatedKey` up to `CATALOG_PAGE_LIMIT` items total.
+   */
+  async queryTemplatesByDeviceCode(deviceCode: string): Promise<CatalogTemplateItem[]> {
+    return this.queryCatalogByDeviceCode(
+      this.options.catalogTemplatesTableName,
+      deviceCode,
+      toTemplateItem
+    );
+  }
+
+  private async queryCatalogByDeviceCode<T>(
+    tableName: string,
+    deviceCode: string,
+    parse: (item: Record<string, AttributeValue>) => T
+  ): Promise<T[]> {
+    const collected: T[] = [];
+    let exclusiveStartKey: Record<string, AttributeValue> | undefined;
+
+    do {
+      const input: QueryInput = {
+        TableName: tableName,
+        IndexName: this.options.catalogDeviceCodeIndexName,
+        KeyConditionExpression: "DeviceCode = :dc",
+        ExpressionAttributeValues: { ":dc": s(deviceCode) }
+      };
+      if (exclusiveStartKey !== undefined) {
+        input.ExclusiveStartKey = exclusiveStartKey;
+      }
+
+      const response = await dynamoClient.send(new QueryCommand(input));
+      const items = response.Items ?? [];
+      for (const item of items) {
+        if (collected.length >= CATALOG_PAGE_LIMIT) {
+          // Hard stop — see CATALOG_PAGE_LIMIT comment.
+          return collected;
+        }
+        collected.push(parse(item));
+      }
+      exclusiveStartKey = response.LastEvaluatedKey;
+    } while (exclusiveStartKey !== undefined && collected.length < CATALOG_PAGE_LIMIT);
+
+    return collected;
+  }
+
+  /**
+   * Query the print-jobs `DeviceCreatedIndex` GSI by `DeviceCode`, ordered
+   * descending by `CreatedSortKey`. Honors the caller-supplied `limit` and
+   * `cursor`; returns `nextCursor` when more pages exist on the GSI.
+   */
+  async queryPrintJobsByDevice(
+    deviceCode: string,
+    limit: number,
+    cursor: Record<string, AttributeValue> | undefined
+  ): Promise<{ items: PrintJobItem[]; nextCursor: Record<string, AttributeValue> | undefined }> {
+    const input: QueryInput = {
+      TableName: this.options.printJobsTableName,
+      IndexName: this.options.printJobsDeviceCreatedIndexName,
+      KeyConditionExpression: "DeviceCode = :dc",
+      ExpressionAttributeValues: { ":dc": s(deviceCode) },
+      ScanIndexForward: false,
+      Limit: limit
+    };
+    if (cursor !== undefined) {
+      input.ExclusiveStartKey = cursor;
+    }
+
+    const response = await dynamoClient.send(new QueryCommand(input));
+    const items = (response.Items ?? []).map(toPrintJobItem);
+    return {
+      items,
+      nextCursor: response.LastEvaluatedKey
+    };
+  }
+}
+
+function toProductItem(item: Record<string, AttributeValue>): CatalogProductItem {
+  const result: CatalogProductItem = {
+    id: readNumber(item, "Id"),
+    code: readString(item, "Code"),
+    name: readString(item, "Name")
+  };
+  const categoryName = readOptionalString(item, "CategoryName");
+  if (categoryName !== undefined) result.categoryName = categoryName;
+  const priceCents = readPriceAsCents(item, "Price");
+  if (priceCents !== undefined) result.priceCents = priceCents;
+  // The cloud writer uses `LocalLastModifiedUtc` for the row's "updated at"
+  // — mirror that as `updatedAtUtc` on the wire.
+  const updatedAtUtc = readOptionalString(item, "LocalLastModifiedUtc");
+  if (updatedAtUtc !== undefined) result.updatedAtUtc = updatedAtUtc;
+  return result;
+}
+
+function toTemplateItem(item: Record<string, AttributeValue>): CatalogTemplateItem {
+  const result: CatalogTemplateItem = {
+    id: readNumber(item, "Id"),
+    code: readString(item, "Code"),
+    name: readString(item, "Name")
+  };
+  const updatedAtUtc = readOptionalString(item, "LocalLastModifiedUtc");
+  if (updatedAtUtc !== undefined) result.updatedAtUtc = updatedAtUtc;
+  return result;
+}
+
+function toPrintJobItem(item: Record<string, AttributeValue>): PrintJobItem {
+  const quantity = readNumber(item, "Quantity");
+  const result: PrintJobItem = {
+    id: readNumber(item, "Id"),
+    createdAtUtc: readString(item, "LocalCreatedAtUtc"),
+    completedAtUtc: readNullableString(item, "LocalPrintedAtUtc"),
+    status: readString(item, "Status"),
+    errorMessage: readNullableString(item, "ErrorMessage"),
+    // labelCount = Quantity — print jobs are written with Quantity defaulted
+    // to 1, so 0 (missing) is treated as 1 to keep the wire schema honest.
+    labelCount: quantity > 0 ? quantity : 1
+  };
+  const templateCode = readOptionalString(item, "TemplateCode");
+  if (templateCode !== undefined) result.templateCode = templateCode;
+  return result;
 }
