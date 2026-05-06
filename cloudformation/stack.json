@@ -1,0 +1,70 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "DM Label Printer customer-api Lambda (Function URL). Single handler exposes the read-only customer-facing surface: /api/v1/me/stores, /api/v1/me/devices, /api/v1/me/devices/{deviceCode}.",
+
+  "Parameters": {
+    "LambdaFunctionName": {
+      "Description": "Name of the Lambda function being deployed (lambda-upload sets this per function).",
+      "Type": "String"
+    },
+    "S3Bucket": {
+      "Description": "Bucket used with CloudFormation to update function code.",
+      "Type": "String"
+    },
+    "S3Key": {
+      "Description": "Key to s3 object used with CloudFormation to update function code.",
+      "Type": "String"
+    },
+    "Role": {
+      "Description": "Execution role for the Lambda function.",
+      "Type": "String"
+    },
+    "HandlerEntrypoint": {
+      "Description": "Compiled handler entrypoint, e.g. `dist/handlers/customer-api.handler`.",
+      "Type": "String",
+      "Default": "dist/handlers/customer-api.handler"
+    },
+    "DevicesTableName": {
+      "Description": "Name of the existing DMLabelPrinterCloudDevices DynamoDB table (PK DeviceCode, eu-west-1).",
+      "Type": "String",
+      "Default": "DMLabelPrinterCloudDevices"
+    },
+    "CustomerTokensTableName": {
+      "Description": "Name of the existing DMLabelPrinterCloudCustomerTokens DynamoDB table (PK TokenHash, eu-west-1).",
+      "Type": "String",
+      "Default": "DMLabelPrinterCloudCustomerTokens"
+    }
+  },
+
+  "Resources": {
+    "Lambda": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": { "Ref": "S3Bucket" },
+          "S3Key": { "Ref": "S3Key" }
+        },
+        "FunctionName": { "Ref": "LambdaFunctionName" },
+        "Handler": { "Ref": "HandlerEntrypoint" },
+        "Role": { "Ref": "Role" },
+        "Runtime": "nodejs24.x",
+        "Architectures": ["arm64"],
+        "Timeout": 30,
+        "MemorySize": 512,
+        "Environment": {
+          "Variables": {
+            "DM_LABEL_PRINTER_CLOUD_DEVICES_TABLE": { "Ref": "DevicesTableName" },
+            "DM_LABEL_PRINTER_CLOUD_CUSTOMER_TOKENS_TABLE": { "Ref": "CustomerTokensTableName" }
+          }
+        }
+      }
+    }
+  },
+
+  "Outputs": {
+    "Lambda": {
+      "Value": { "Ref": "Lambda" },
+      "Description": "Name of the newly created Lambda function"
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "name": "label-printer-cloud-customer-api",
+  "version": "1.0.0",
+  "description": "Customer-facing read-only API Lambda for the DM Label Printer customer-facing web app at app.label.ninja - exposes /api/v1/me/stores, /api/v1/me/devices and /api/v1/me/devices/{deviceCode} over a single Function URL.",
+  "main": "dist/handlers/customer-api.js",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rimraf dist",
+    "rebuild": "npm run clean && npm run build",
+    "test": "npm run build && node --test dist/test/smoke.test.js",
+    "prepackage": "npm run rebuild",
+    "deploy:prod": "npm run rebuild && lambda-upload deploy-prod dm",
+    "deploy:prod:check": "lambda-upload deploy-prod dm --check --force --assume-runtime nodejs24.x",
+    "deploy:prod:upgrade": "npm run rebuild && lambda-upload deploy-prod dm --upgrade-config"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dmngr/label-printer-cloud-customer-api.git"
+  },
+  "keywords": [
+    "label-printer",
+    "lambda",
+    "customer-api",
+    "dynamodb"
+  ],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/dmngr/label-printer-cloud-customer-api/issues"
+  },
+  "homepage": "https://github.com/dmngr/label-printer-cloud-customer-api#readme",
+  "no_api": true,
+  "files": [
+    "dist",
+    "custom_errors.policy.json",
+    "package.json",
+    "package-lock.json",
+    "README.md"
+  ],
+  "lambda_role": "",
+  "api": {
+    "apiId": null,
+    "stageNames": [],
+    "method": null
+  },
+  "lambdaAlias": null,
+  "lambda_upload": {
+    "deployed_accounts": []
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.140",
+    "@types/node": "^22.7.4",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.6.2"
+  }
+}
