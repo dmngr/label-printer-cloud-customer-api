@@ -12,6 +12,19 @@ export interface CustomerApiOptions {
   catalogProductsTableName: string;
   catalogTemplatesTableName: string;
   printJobsTableName: string;
+  /**
+   * Name of the device-commands table the customer-api writes Pending rows
+   * into. The device-side `CloudRemoteCommandService` reads / claims them
+   * via the device-command-claim Lambda.
+   */
+  deviceCommandsTableName: string;
+  /**
+   * Name of the monotonic counters table — used to mint the `Id` for each
+   * new command row via `UpdateItem ADD NextValue :one`. Counter name
+   * `DeviceCommands` is shared with the existing device-command-write
+   * Lambda (cloud-side admin tooling) so the Id sequence stays single-source.
+   */
+  countersTableName: string;
   /** Name of the DeviceCode GSI on the catalog product/template tables. */
   catalogDeviceCodeIndexName: string;
   /** Name of the (DeviceCode, CreatedSortKey) GSI on the print-jobs table. */
@@ -27,6 +40,8 @@ const DEFAULT_CUSTOMER_TOKENS_TABLE = "DMLabelPrinterCloudCustomerTokens";
 const DEFAULT_CATALOG_PRODUCTS_TABLE = "DMLabelPrinterCloudCatalogProducts";
 const DEFAULT_CATALOG_TEMPLATES_TABLE = "DMLabelPrinterCloudCatalogTemplates";
 const DEFAULT_PRINT_JOBS_TABLE = "DMLabelPrinterCloudPrintJobs";
+const DEFAULT_DEVICE_COMMANDS_TABLE = "DMLabelPrinterCloudDeviceCommands";
+const DEFAULT_COUNTERS_TABLE = "DMLabelPrinterCloudCounters";
 const DEFAULT_CATALOG_DEVICE_CODE_INDEX = "DeviceCodeIndex";
 const DEFAULT_PRINT_JOBS_DEVICE_CREATED_INDEX = "DeviceCreatedIndex";
 const DEFAULT_ONLINE_WINDOW_MINUTES = 5;
@@ -57,6 +72,14 @@ export function loadOptions(): CustomerApiOptions {
     printJobsTableName: readValue(
       "DM_LABEL_PRINTER_CLOUD_PRINT_JOBS_TABLE",
       DEFAULT_PRINT_JOBS_TABLE
+    ),
+    deviceCommandsTableName: readValue(
+      "DM_LABEL_PRINTER_CLOUD_DEVICE_COMMANDS_TABLE",
+      DEFAULT_DEVICE_COMMANDS_TABLE
+    ),
+    countersTableName: readValue(
+      "DM_LABEL_PRINTER_CLOUD_COUNTERS_TABLE",
+      DEFAULT_COUNTERS_TABLE
     ),
     catalogDeviceCodeIndexName: readValue(
       "DM_LABEL_PRINTER_CLOUD_CATALOG_DEVICE_CODE_INDEX",

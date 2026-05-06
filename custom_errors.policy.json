@@ -31,6 +31,30 @@
     "customer_api_invalid_query_param": {
       "emit_requestid_success": false,
       "notes": "Caller-supplied query string parameter (limit / cursor on /jobs) is missing-shape, out-of-range, or unparseable (HTTP 400)."
+    },
+    "customer_api_command_invalid_body": {
+      "emit_requestid_success": false,
+      "notes": "POST /commands body is unparseable, missing commandType, or has malformed required fields (HTTP 400)."
+    },
+    "customer_api_command_unsupported_type": {
+      "emit_requestid_success": false,
+      "notes": "POST /commands commandType is not the Phase 2 supported value 'print-label' (HTTP 400)."
+    },
+    "customer_api_command_invalid_quantity": {
+      "emit_requestid_success": false,
+      "notes": "POST /commands quantity is not an integer in [1, 999] (HTTP 400)."
+    },
+    "customer_api_command_product_not_found": {
+      "emit_requestid_success": false,
+      "notes": "POST /commands productCode is not present in the device's catalog mirror (HTTP 400)."
+    },
+    "customer_api_command_template_not_found": {
+      "emit_requestid_success": false,
+      "notes": "POST /commands templateCode (when provided) is not present in the device's catalog mirror (HTTP 400)."
+    },
+    "customer_api_command_not_found": {
+      "emit_requestid_success": false,
+      "notes": "GET /commands/{id} row is missing or belongs to a different DeviceCode (HTTP 404)."
     }
   }
 }

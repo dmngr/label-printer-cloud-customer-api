@@ -33,6 +33,16 @@
       "Description": "Name of the existing DMLabelPrinterCloudCustomerTokens DynamoDB table (PK TokenHash, eu-west-1).",
       "Type": "String",
       "Default": "DMLabelPrinterCloudCustomerTokens"
+    },
+    "DeviceCommandsTableName": {
+      "Description": "Name of the existing DMLabelPrinterCloudDeviceCommands DynamoDB table (PK Id, GSI DeviceStatusIndex). Phase 2 customer-api writes Pending rows for the device-side claim flow.",
+      "Type": "String",
+      "Default": "DMLabelPrinterCloudDeviceCommands"
+    },
+    "CountersTableName": {
+      "Description": "Name of the existing DMLabelPrinterCloudCounters DynamoDB table (PK CounterName, attribute NextValue). Phase 2 customer-api atomically increments the DeviceCommands counter to mint command Ids.",
+      "Type": "String",
+      "Default": "DMLabelPrinterCloudCounters"
     }
   },
 
@@ -54,7 +64,9 @@
         "Environment": {
           "Variables": {
             "DM_LABEL_PRINTER_CLOUD_DEVICES_TABLE": { "Ref": "DevicesTableName" },
-            "DM_LABEL_PRINTER_CLOUD_CUSTOMER_TOKENS_TABLE": { "Ref": "CustomerTokensTableName" }
+            "DM_LABEL_PRINTER_CLOUD_CUSTOMER_TOKENS_TABLE": { "Ref": "CustomerTokensTableName" },
+            "DM_LABEL_PRINTER_CLOUD_DEVICE_COMMANDS_TABLE": { "Ref": "DeviceCommandsTableName" },
+            "DM_LABEL_PRINTER_CLOUD_COUNTERS_TABLE": { "Ref": "CountersTableName" }
           }
         }
       }

@@ -11,10 +11,16 @@ bearer), this Lambda is what they call to list their stores and devices.
 | `/api/v1/me/stores` | GET | strict customer bearer |
 | `/api/v1/me/devices` | GET | strict customer bearer |
 | `/api/v1/me/devices/{deviceCode}` | GET | strict customer bearer |
+| `/api/v1/me/devices/{deviceCode}/products` | GET | strict customer bearer |
+| `/api/v1/me/devices/{deviceCode}/templates` | GET | strict customer bearer |
+| `/api/v1/me/devices/{deviceCode}/jobs` | GET | strict customer bearer |
+| `/api/v1/me/devices/{deviceCode}/commands` | POST | strict customer bearer |
+| `/api/v1/me/devices/{deviceCode}/commands/{id}` | GET | strict customer bearer |
 
-This is Phase 0 scope only: the read-only "what's authorized for me" surface.
-`/products`, `/templates`, `/jobs`, `/commands`, and `/events` will be added
-in Phase 1+ but are explicitly out of scope for this repo cut.
+The `commands` POST endpoint mirrors the schema the cloud admin tool's
+device-command-write Lambda already produces, so the device-side
+`CloudRemoteCommandService` claim/complete flow picks up customer-issued
+commands unchanged. Phase 2 supports `commandType: "print-label"` only.
 
 ## Layout
 
@@ -107,6 +113,8 @@ an extra `storeId` field, no `stores` wrapper, and 403s if the device's
 |---|---|---|---|
 | `DM_LABEL_PRINTER_CLOUD_DEVICES_TABLE` | no | `DMLabelPrinterCloudDevices` | Devices table name. |
 | `DM_LABEL_PRINTER_CLOUD_CUSTOMER_TOKENS_TABLE` | no | `DMLabelPrinterCloudCustomerTokens` | Customer-tokens table name. |
+| `DM_LABEL_PRINTER_CLOUD_DEVICE_COMMANDS_TABLE` | no | `DMLabelPrinterCloudDeviceCommands` | Device-commands table — Phase 2 customer-api writes Pending rows here. |
+| `DM_LABEL_PRINTER_CLOUD_COUNTERS_TABLE` | no | `DMLabelPrinterCloudCounters` | Monotonic counters table — `DeviceCommands` row is atomically incremented to mint command Ids. |
 
 ## Build & test
 
@@ -151,6 +159,13 @@ declares the codes used here:
 - `customer_api_token_no_stores` (409)
 - `customer_api_device_not_found` (404)
 - `customer_api_forbidden_store` (403)
+- `customer_api_invalid_query_param` (400)
+- `customer_api_command_invalid_body` (400)
+- `customer_api_command_unsupported_type` (400)
+- `customer_api_command_invalid_quantity` (400)
+- `customer_api_command_product_not_found` (400)
+- `customer_api_command_template_not_found` (400)
+- `customer_api_command_not_found` (404)
 
 Defaults to `emit_requestid_success: false` (no legacy Slack suppression). See
 [`dmngr/lambda-policies/handled-errors/handled-error-policy.md`](https://github.com/dmngr/lambda-policies/blob/main/handled-errors/handled-error-policy.md)
