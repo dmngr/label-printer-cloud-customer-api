@@ -123,6 +123,9 @@ test("custom_errors.policy.json declares all customer_api_* codes used by the ha
     "customer_api_command_invalid_body",
     "customer_api_command_unsupported_type",
     "customer_api_command_invalid_quantity",
+    "customer_api_command_invalid_product",
+    "customer_api_command_invalid_template",
+    "customer_api_command_invalid_id",
     "customer_api_command_product_not_found",
     "customer_api_command_template_not_found",
     "customer_api_command_not_found"

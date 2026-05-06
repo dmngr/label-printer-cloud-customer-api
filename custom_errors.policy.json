@@ -38,11 +38,23 @@
     },
     "customer_api_command_unsupported_type": {
       "emit_requestid_success": false,
-      "notes": "POST /commands commandType is not the Phase 2 supported value 'print-label' (HTTP 400)."
+      "notes": "POST /commands commandType is not in the supported set (print-label, upsert-product, delete-product, upsert-template, delete-template) (HTTP 400)."
     },
     "customer_api_command_invalid_quantity": {
       "emit_requestid_success": false,
       "notes": "POST /commands quantity is not an integer in [1, 999] (HTTP 400)."
+    },
+    "customer_api_command_invalid_product": {
+      "emit_requestid_success": false,
+      "notes": "POST /commands upsert-product body is missing/invalid (bad code, name, categoryName or priceCents) (HTTP 400)."
+    },
+    "customer_api_command_invalid_template": {
+      "emit_requestid_success": false,
+      "notes": "POST /commands upsert-template body is missing/invalid (bad code, name, body) (HTTP 400)."
+    },
+    "customer_api_command_invalid_id": {
+      "emit_requestid_success": false,
+      "notes": "POST /commands delete-product / delete-template / upsert-* given a non-positive or non-integer id field (HTTP 400)."
     },
     "customer_api_command_product_not_found": {
       "emit_requestid_success": false,

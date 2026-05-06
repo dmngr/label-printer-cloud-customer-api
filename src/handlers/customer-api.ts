@@ -82,9 +82,29 @@ const DEVICE_COMMANDS_SUFFIX = "/commands";
 const DEFAULT_JOBS_LIMIT = 50;
 const MAX_JOBS_LIMIT = 200;
 
-const SUPPORTED_COMMAND_TYPE = "print-label";
+const COMMAND_TYPE_PRINT_LABEL = "print-label";
+const COMMAND_TYPE_UPSERT_PRODUCT = "upsert-product";
+const COMMAND_TYPE_DELETE_PRODUCT = "delete-product";
+const COMMAND_TYPE_UPSERT_TEMPLATE = "upsert-template";
+const COMMAND_TYPE_DELETE_TEMPLATE = "delete-template";
+
+const SUPPORTED_COMMAND_TYPES: ReadonlySet<string> = new Set([
+  COMMAND_TYPE_PRINT_LABEL,
+  COMMAND_TYPE_UPSERT_PRODUCT,
+  COMMAND_TYPE_DELETE_PRODUCT,
+  COMMAND_TYPE_UPSERT_TEMPLATE,
+  COMMAND_TYPE_DELETE_TEMPLATE
+]);
+
 const DEFAULT_COMMAND_QUANTITY = 1;
 const MAX_COMMAND_QUANTITY = 999;
+// Upper bound on `Number.MAX_SAFE_INTEGER` ids supplied by the caller for
+// upsert / delete payloads — anything bigger can't be represented as a JS
+// `number` losslessly. The wire schema (.NET long) goes higher, but we never
+// mint our own ids in this range from the customer-api; ids that big can only
+// come from the caller pasting in a long value, and we reject those rather
+// than silently rounding.
+const MAX_SAFE_LONG_ID = Number.MAX_SAFE_INTEGER;
 // Truncate the bearer's sha256 hash to 16 hex chars when writing `RequestedBy`
 // — enough to correlate audits to a token row, without surfacing the full
 // hash anywhere a customer can read it back.
@@ -483,25 +503,75 @@ function parseJobsQuery(rawQuery: Record<string, string | undefined> | undefined
   return { limit, cursor };
 }
 
-interface ParsedCreateCommandBody {
-  commandType: string;
+interface ParsedPrintLabelBody {
+  commandType: typeof COMMAND_TYPE_PRINT_LABEL;
   productCode: string;
   templateCode: string | null;
   quantity: number;
 }
+
+interface ParsedUpsertProductBody {
+  commandType: typeof COMMAND_TYPE_UPSERT_PRODUCT;
+  product: {
+    id: number | null;
+    code: string;
+    name: string;
+    categoryName: string | null;
+    priceCents: number;
+  };
+}
+
+interface ParsedDeleteProductBody {
+  commandType: typeof COMMAND_TYPE_DELETE_PRODUCT;
+  productId: number;
+}
+
+interface ParsedUpsertTemplateBody {
+  commandType: typeof COMMAND_TYPE_UPSERT_TEMPLATE;
+  template: {
+    id: number | null;
+    code: string;
+    name: string;
+    body: string;
+  };
+}
+
+interface ParsedDeleteTemplateBody {
+  commandType: typeof COMMAND_TYPE_DELETE_TEMPLATE;
+  templateId: number;
+}
+
+type ParsedCreateCommandBody =
+  | ParsedPrintLabelBody
+  | ParsedUpsertProductBody
+  | ParsedDeleteProductBody
+  | ParsedUpsertTemplateBody
+  | ParsedDeleteTemplateBody;
 
 /**
  * Strict validation of the `POST /commands` request body. Throws a
  * `CustomError` with a policy-tracked code on every rejection — the handler
  * turns that into a 400 with the matching code.
  *
- * Validation rules:
+ * Validation rules (Phase 3):
  *  - body must be valid JSON, an object (not an array, not a primitive)
- *  - `commandType` must be a non-empty string equal to `print-label`
- *  - `productCode` must be a non-empty string (case preserved on the wire,
- *    case-insensitive on lookup — see `findProductByCode`)
- *  - `templateCode` is optional; when present, must be a non-empty string
- *  - `quantity` is optional; defaults to 1; must be an integer in [1, 999]
+ *  - `commandType` must be a non-empty string in the supported set
+ *    (`print-label`, `upsert-product`, `delete-product`, `upsert-template`,
+ *    `delete-template`).
+ *  - `print-label`: same rules as Phase 2 — `productCode` non-empty string,
+ *    `templateCode` optional non-empty string, `quantity` optional integer
+ *    in [1, 999].
+ *  - `upsert-product`: `product.code` and `product.name` must be non-empty
+ *    strings; `product.id` (if present) must be a positive safe-integer;
+ *    `product.priceCents` must be a non-negative integer (defaults to 0
+ *    when missing — the device handler treats Price = 0 as "not priced");
+ *    `product.categoryName` is optional, when present must be a non-empty
+ *    string.
+ *  - `delete-product` / `delete-template`: id must be a positive
+ *    safe-integer.
+ *  - `upsert-template`: `template.code` and `template.name` must be
+ *    non-empty strings; `template.id` (if present) must be a positive
+ *    safe-integer; `template.body` is optional, defaults to "".
  */
 function parseCreateCommandBody(rawBody: string | undefined): ParsedCreateCommandBody {
   if (typeof rawBody !== "string" || rawBody.trim().length === 0) {
@@ -525,10 +595,28 @@ function parseCreateCommandBody(rawBody: string | undefined): ParsedCreateComman
     throw new CustomError("customer_api_command_invalid_body");
   }
   const commandType = body.commandType.trim();
-  if (commandType !== SUPPORTED_COMMAND_TYPE) {
+  if (!SUPPORTED_COMMAND_TYPES.has(commandType)) {
     throw new CustomError("customer_api_command_unsupported_type");
   }
 
+  switch (commandType) {
+    case COMMAND_TYPE_PRINT_LABEL:
+      return parsePrintLabelBody(body);
+    case COMMAND_TYPE_UPSERT_PRODUCT:
+      return parseUpsertProductBody(body);
+    case COMMAND_TYPE_DELETE_PRODUCT:
+      return parseDeleteProductBody(body);
+    case COMMAND_TYPE_UPSERT_TEMPLATE:
+      return parseUpsertTemplateBody(body);
+    case COMMAND_TYPE_DELETE_TEMPLATE:
+      return parseDeleteTemplateBody(body);
+    default:
+      // Unreachable — already gated by SUPPORTED_COMMAND_TYPES above.
+      throw new CustomError("customer_api_command_unsupported_type");
+  }
+}
+
+function parsePrintLabelBody(body: CreateCommandRequestBody): ParsedPrintLabelBody {
   if (typeof body.productCode !== "string" || body.productCode.trim().length === 0) {
     // Treat a missing productCode as a body validation issue (caller
     // discoverability) — the explicit "product not found" code is reserved
@@ -559,7 +647,141 @@ function parseCreateCommandBody(rawBody: string | undefined): ParsedCreateComman
     quantity = body.quantity;
   }
 
-  return { commandType, productCode, templateCode, quantity };
+  return { commandType: COMMAND_TYPE_PRINT_LABEL, productCode, templateCode, quantity };
+}
+
+/**
+ * Coerce an optional positive long-shaped id from caller input. Returns
+ * `null` when absent (so the device handler treats the apply as "match by
+ * code, otherwise insert"); throws `customer_api_command_invalid_id` when
+ * present but malformed.
+ */
+function parseOptionalIdField(raw: unknown): number | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw)) {
+    throw new CustomError("customer_api_command_invalid_id");
+  }
+  if (raw <= 0 || raw > MAX_SAFE_LONG_ID) {
+    throw new CustomError("customer_api_command_invalid_id");
+  }
+  return raw;
+}
+
+/**
+ * Coerce a required positive long-shaped id from caller input (used by the
+ * delete-product / delete-template paths). Throws
+ * `customer_api_command_invalid_id` on any rejection.
+ */
+function parseRequiredIdField(raw: unknown): number {
+  if (raw === undefined || raw === null) {
+    throw new CustomError("customer_api_command_invalid_id");
+  }
+  const parsed = parseOptionalIdField(raw);
+  if (parsed === null) {
+    throw new CustomError("customer_api_command_invalid_id");
+  }
+  return parsed;
+}
+
+function parseUpsertProductBody(body: CreateCommandRequestBody): ParsedUpsertProductBody {
+  const product = body.product;
+  if (product === null || typeof product !== "object" || Array.isArray(product)) {
+    throw new CustomError("customer_api_command_invalid_product");
+  }
+  const p = product as {
+    id?: unknown;
+    code?: unknown;
+    name?: unknown;
+    categoryName?: unknown;
+    priceCents?: unknown;
+  };
+
+  const id = parseOptionalIdField(p.id);
+
+  if (typeof p.code !== "string" || p.code.trim().length === 0) {
+    throw new CustomError("customer_api_command_invalid_product");
+  }
+  const code = p.code.trim();
+
+  if (typeof p.name !== "string" || p.name.trim().length === 0) {
+    throw new CustomError("customer_api_command_invalid_product");
+  }
+  const name = p.name.trim();
+
+  let categoryName: string | null = null;
+  if (p.categoryName !== undefined && p.categoryName !== null) {
+    if (typeof p.categoryName !== "string" || p.categoryName.trim().length === 0) {
+      throw new CustomError("customer_api_command_invalid_product");
+    }
+    categoryName = p.categoryName.trim();
+  }
+
+  let priceCents = 0;
+  if (p.priceCents !== undefined && p.priceCents !== null) {
+    if (typeof p.priceCents !== "number" || !Number.isFinite(p.priceCents)) {
+      throw new CustomError("customer_api_command_invalid_product");
+    }
+    if (!Number.isInteger(p.priceCents)) {
+      throw new CustomError("customer_api_command_invalid_product");
+    }
+    if (p.priceCents < 0) {
+      throw new CustomError("customer_api_command_invalid_product");
+    }
+    priceCents = p.priceCents;
+  }
+
+  return {
+    commandType: COMMAND_TYPE_UPSERT_PRODUCT,
+    product: { id, code, name, categoryName, priceCents }
+  };
+}
+
+function parseDeleteProductBody(body: CreateCommandRequestBody): ParsedDeleteProductBody {
+  const productId = parseRequiredIdField(body.productId);
+  return { commandType: COMMAND_TYPE_DELETE_PRODUCT, productId };
+}
+
+function parseUpsertTemplateBody(body: CreateCommandRequestBody): ParsedUpsertTemplateBody {
+  const template = body.template;
+  if (template === null || typeof template !== "object" || Array.isArray(template)) {
+    throw new CustomError("customer_api_command_invalid_template");
+  }
+  const t = template as {
+    id?: unknown;
+    code?: unknown;
+    name?: unknown;
+    body?: unknown;
+  };
+
+  const id = parseOptionalIdField(t.id);
+
+  if (typeof t.code !== "string" || t.code.trim().length === 0) {
+    throw new CustomError("customer_api_command_invalid_template");
+  }
+  const code = t.code.trim();
+
+  if (typeof t.name !== "string" || t.name.trim().length === 0) {
+    throw new CustomError("customer_api_command_invalid_template");
+  }
+  const name = t.name.trim();
+
+  let bodyText = "";
+  if (t.body !== undefined && t.body !== null) {
+    if (typeof t.body !== "string") {
+      throw new CustomError("customer_api_command_invalid_template");
+    }
+    bodyText = t.body;
+  }
+
+  return {
+    commandType: COMMAND_TYPE_UPSERT_TEMPLATE,
+    template: { id, code, name, body: bodyText }
+  };
+}
+
+function parseDeleteTemplateBody(body: CreateCommandRequestBody): ParsedDeleteTemplateBody {
+  const templateId = parseRequiredIdField(body.templateId);
+  return { commandType: COMMAND_TYPE_DELETE_TEMPLATE, templateId };
 }
 
 /**
@@ -583,8 +805,9 @@ function readRequestBody(event: LambdaFunctionURLEvent): string | undefined {
 
 /**
  * Build the JSON payload string the device-side `CloudRemoteCommandService`
- * receives via `command.PayloadJson`. Mirrors the structure documented in
- * the design doc so existing devices need no code changes:
+ * receives via `command.PayloadJson` for a `print-label` command. Mirrors the
+ * structure documented in the design doc so existing devices need no code
+ * changes:
  *
  *   {"ProductId":<n|null>,"ProductCode":"...","ProductName":"...",
  *    "Quantity":1,
@@ -594,7 +817,7 @@ function readRequestBody(event: LambdaFunctionURLEvent): string | undefined {
  * 0 would be ambiguous with a real local id. The local print API resolves
  * any missing template fall-through to the product's default template.
  */
-function buildCommandPayloadJson(
+function buildPrintLabelPayloadJson(
   product: { id: number; code: string; name: string },
   template: { id: number; code: string; name: string } | null,
   quantity: number
@@ -609,6 +832,62 @@ function buildCommandPayloadJson(
     TemplateName: template !== null ? template.name : null
   };
   return JSON.stringify(payload);
+}
+
+/**
+ * Build the JSON payload string for an `upsert-product` command. Shape
+ * matches the device-side `RemoteCatalogApplier.UpsertProduct` reader (which
+ * deserializes with `PropertyNameCaseInsensitive = true`, so PascalCase
+ * here mirrors the existing `print-label` payload's casing for consistency).
+ *
+ *   { "Id": <long|null>, "Code": "...", "Name": "...",
+ *     "CategoryName": "...|null", "Price": <decimal> }
+ *
+ * `Price` is emitted as a JSON number (e.g. `3.50`) — the device parses with
+ * `JsonElement.GetDecimal()` which accepts decimal-shaped JSON numbers. We
+ * derive it from `priceCents / 100` server-side so the wire shape stays
+ * integer-cents (avoids the float-precision footgun on the caller side).
+ */
+function buildUpsertProductPayloadJson(product: ParsedUpsertProductBody["product"]): string {
+  // Format `price` with up to 2 fractional digits, no trailing zeros, but
+  // preserve a single trailing `.0` so the .NET decimal parser sees a number
+  // with a fractional component (it accepts both — kept simple here).
+  const price = product.priceCents / 100;
+  const payload: Record<string, unknown> = {
+    Id: product.id !== null && product.id > 0 ? product.id : null,
+    Code: product.code,
+    Name: product.name,
+    CategoryName: product.categoryName,
+    Price: price
+  };
+  return JSON.stringify(payload);
+}
+
+/**
+ * Build the JSON payload string for an `upsert-template` command. Shape
+ * matches the device-side `RemoteCatalogApplier.UpsertTemplate` reader.
+ *
+ *   { "Id": <long|null>, "Code": "...", "Name": "...", "Body": "..." }
+ */
+function buildUpsertTemplatePayloadJson(
+  template: ParsedUpsertTemplateBody["template"]
+): string {
+  const payload: Record<string, unknown> = {
+    Id: template.id !== null && template.id > 0 ? template.id : null,
+    Code: template.code,
+    Name: template.name,
+    Body: template.body
+  };
+  return JSON.stringify(payload);
+}
+
+/**
+ * Build the JSON payload string for a `delete-product` / `delete-template`
+ * command. Shape matches the device-side `RemoteCatalogApplier.DeletePayload`
+ * reader (single `Id` field).
+ */
+function buildDeleteByIdPayloadJson(id: number): string {
+  return JSON.stringify({ Id: id });
 }
 
 /**
@@ -646,16 +925,17 @@ function isDevicesListPath(rawPath: string): boolean {
 }
 
 /**
- * Handles `POST /api/v1/me/devices/{deviceCode}/commands` end-to-end:
+ * Handles `POST /api/v1/me/devices/{deviceCode}/commands` end-to-end.
  *
- *   1. Parse + validate the body (CustomError -> 400 with policy code).
- *   2. Look up the product (and optional template) by code via the catalog
- *      GSI. Return 400 with the explicit "not found" code on miss.
- *   3. Mint the next monotonic Id from the `DeviceCommands` counter row.
- *   4. Write the Pending row into `DMLabelPrinterCloudDeviceCommands` with
- *      the same schema the device-side claim flow already understands.
- *   5. Respond 201 with `{id, status, requestedAtUtc, commandType,
- *      productCode}`.
+ * Phase 2 supported only `print-label`, where the handler hydrated the row's
+ * `PayloadJson` from the catalog mirror. Phase 3 added four catalog-edit
+ * types (`upsert-product`, `delete-product`, `upsert-template`,
+ * `delete-template`) where the payload IS the upsert/delete intent — no
+ * catalog lookup required. The dispatch below picks the right payload
+ * builder, but the row schema (Id, Status=Pending, DeviceStatusRequestedKey,
+ * RequestedBy, StoreCode, RequestedAtUtc, RequestedAtEpochSeconds) is shared
+ * across all five types so the device-side claim flow needs no per-type
+ * branching at the queue layer.
  *
  * The caller is `RequestedBy` = `customer-api:<TokenHash[:16]>` — never the
  * full hash. The device's `StoreCode` is copied from the device row's
@@ -679,33 +959,63 @@ async function handleCreateCommand(
     throw err;
   }
 
-  const product = await store.findProductByCode(device.deviceCode, parsedBody.productCode);
-  if (product === null) {
-    logHandledErrorAction(
-      "customer_api_command_product_not_found",
-      shouldSuppress("customer_api_command_product_not_found")
-    );
-    return textResponse(400, "customer_api_command_product_not_found");
-  }
+  let payloadJson: string;
+  let responseProductCode: string | null;
 
-  let template: { id: number; code: string; name: string } | null = null;
-  if (parsedBody.templateCode !== null) {
-    const lookedUp = await store.findTemplateByCode(device.deviceCode, parsedBody.templateCode);
-    if (lookedUp === null) {
-      logHandledErrorAction(
-        "customer_api_command_template_not_found",
-        shouldSuppress("customer_api_command_template_not_found")
-      );
-      return textResponse(400, "customer_api_command_template_not_found");
+  switch (parsedBody.commandType) {
+    case COMMAND_TYPE_PRINT_LABEL: {
+      const product = await store.findProductByCode(device.deviceCode, parsedBody.productCode);
+      if (product === null) {
+        logHandledErrorAction(
+          "customer_api_command_product_not_found",
+          shouldSuppress("customer_api_command_product_not_found")
+        );
+        return textResponse(400, "customer_api_command_product_not_found");
+      }
+
+      let template: { id: number; code: string; name: string } | null = null;
+      if (parsedBody.templateCode !== null) {
+        const lookedUp = await store.findTemplateByCode(device.deviceCode, parsedBody.templateCode);
+        if (lookedUp === null) {
+          logHandledErrorAction(
+            "customer_api_command_template_not_found",
+            shouldSuppress("customer_api_command_template_not_found")
+          );
+          return textResponse(400, "customer_api_command_template_not_found");
+        }
+        template = lookedUp;
+      }
+
+      payloadJson = buildPrintLabelPayloadJson(product, template, parsedBody.quantity);
+      responseProductCode = product.code;
+      break;
     }
-    template = lookedUp;
+    case COMMAND_TYPE_UPSERT_PRODUCT: {
+      payloadJson = buildUpsertProductPayloadJson(parsedBody.product);
+      responseProductCode = parsedBody.product.code;
+      break;
+    }
+    case COMMAND_TYPE_DELETE_PRODUCT: {
+      payloadJson = buildDeleteByIdPayloadJson(parsedBody.productId);
+      responseProductCode = null;
+      break;
+    }
+    case COMMAND_TYPE_UPSERT_TEMPLATE: {
+      payloadJson = buildUpsertTemplatePayloadJson(parsedBody.template);
+      responseProductCode = null;
+      break;
+    }
+    case COMMAND_TYPE_DELETE_TEMPLATE: {
+      payloadJson = buildDeleteByIdPayloadJson(parsedBody.templateId);
+      responseProductCode = null;
+      break;
+    }
   }
 
   const id = await store.getNextDeviceCommandId();
   const requestedAtUtc = nowIsoNanos();
   const requestedAtEpochSeconds = epochSecondsFromIso(requestedAtUtc);
 
-  const payloadJson = buildCommandPayloadJson(product, template, parsedBody.quantity);
   const tokenPrefix = callerTokenHash.slice(0, REQUESTED_BY_TOKEN_HASH_PREFIX_LENGTH);
   const requestedBy = `customer-api:${tokenPrefix}`;
 
@@ -725,7 +1035,7 @@ async function handleCreateCommand(
     status: "Pending",
     requestedAtUtc,
     commandType: parsedBody.commandType,
-    productCode: product.code
+    productCode: responseProductCode
   };
   console.log("RequestId SUCCESS");
   return jsonResponse(201, responseBody);

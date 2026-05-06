@@ -135,28 +135,49 @@ export interface CatalogTemplateLookup {
 }
 
 /**
- * Body the customer-api accepts on `POST /commands`. Only `print-label` is
- * supported in the Phase 2 cut. `quantity` defaults to 1 server-side and is
- * range-validated (1..999). `templateCode` is optional — when absent the
- * device falls back to the product's default template at print time.
+ * Body the customer-api accepts on `POST /commands`. Phase 3 added four
+ * catalog-edit command types alongside `print-label`:
+ *
+ *   - `print-label`     — enqueue a label print (server hydrates payload from
+ *                         the catalog mirror).
+ *   - `upsert-product`  — insert/update a product (payload IS the intent).
+ *   - `delete-product`  — delete a product by id.
+ *   - `upsert-template` — insert/update a template (payload IS the intent).
+ *   - `delete-template` — delete a template by id.
+ *
+ * The fields marked optional below are only populated for the matching
+ * `commandType`; the handler validates them per type. We type them as
+ * `unknown` so the discriminator + per-field validators stay strict.
  */
 export interface CreateCommandRequestBody {
   commandType?: unknown;
+  // print-label fields
   productCode?: unknown;
   templateCode?: unknown;
   quantity?: unknown;
+  // upsert-product / upsert-template payloads
+  product?: unknown;
+  template?: unknown;
+  // delete-product / delete-template ids
+  productId?: unknown;
+  templateId?: unknown;
 }
 
 /**
  * Wire payload returned by `POST /commands` (HTTP 201). Mirrors the row
  * the device-side claim flow will pick up next time it polls.
+ *
+ * `productCode` is only meaningful for `print-label`; for the Phase 3
+ * catalog-edit types (`upsert-product` / `delete-product` / `upsert-template`
+ * / `delete-template`) it stays `null` since the row's PayloadJson encodes
+ * the upsert/delete intent rather than a product reference.
  */
 export interface CreateCommandResponse {
   id: number;
   status: string;
   requestedAtUtc: string;
   commandType: string;
-  productCode: string;
+  productCode: string | null;
 }
 
 /**
