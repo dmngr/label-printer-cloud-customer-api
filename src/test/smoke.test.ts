@@ -10,6 +10,44 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
+test("catalog identities use device-local ids instead of DynamoDB row ids", async () => {
+  const {
+    toCatalogProductIdentity,
+    toCatalogTemplateIdentity
+  } = await import("../lib/catalog-identities");
+
+  const product = toCatalogProductIdentity({
+    Id: { N: "5" },
+    LocalProductId: { N: "10" },
+    Code: { S: "CHEESEBURGER" },
+    Name: { S: "Cheeseburger" }
+  });
+  assert.deepEqual(product, {
+    id: 10,
+    code: "CHEESEBURGER",
+    name: "Cheeseburger"
+  });
+
+  const template = toCatalogTemplateIdentity({
+    Id: { N: "5" },
+    LocalTemplateId: { N: "1" },
+    Code: { S: "DEFAULT" },
+    Name: { S: "Default" }
+  });
+  assert.deepEqual(template, {
+    id: 1,
+    code: "DEFAULT",
+    name: "Default"
+  });
+
+  const missingLocalId = toCatalogProductIdentity({
+    Id: { N: "999" },
+    Code: { S: "NO-LOCAL-ID" },
+    Name: { S: "Unsafe fallback guard" }
+  });
+  assert.equal(missingLocalId.id, 0);
+});
+
 test("sha256Hex returns lowercase 64-char hex for a base64url-shaped bearer", async () => {
   const { sha256Hex } = await import("../lib/bearer-authorizer");
 

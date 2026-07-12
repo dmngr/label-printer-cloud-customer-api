@@ -64,6 +64,7 @@ export interface DevicesResponse {
  * is computed by multiplying the stored decimal `Price` by 100 (rounded).
  */
 export interface CatalogProductItem {
+  /** Device-local product id (LocalProductId), not the DynamoDB row key. */
   id: number;
   code: string;
   name: string;
@@ -81,6 +82,7 @@ export interface CatalogProductsResponse {
  * rows surfaced to the customer-facing web app.
  */
 export interface CatalogTemplateItem {
+  /** Device-local template id (LocalTemplateId), not the DynamoDB row key. */
   id: number;
   code: string;
   name: string;
@@ -122,6 +124,7 @@ export interface PrintJobsResponse {
  * command payload the device-side `CloudRemoteCommandService` consumes.
  */
 export interface CatalogProductLookup {
+  /** Device-local product id used by local API commands. */
   id: number;
   code: string;
   name: string;
@@ -129,6 +132,7 @@ export interface CatalogProductLookup {
 
 /** Same shape as `CatalogProductLookup`, projected from the templates table. */
 export interface CatalogTemplateLookup {
+  /** Device-local template id used by local API commands. */
   id: number;
   code: string;
   name: string;

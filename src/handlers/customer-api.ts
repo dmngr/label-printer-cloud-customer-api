@@ -813,9 +813,9 @@ function readRequestBody(event: LambdaFunctionURLEvent): string | undefined {
  *    "Quantity":1,
  *    "TemplateId":<n|null>,"TemplateCode":<"...|null>,"TemplateName":<"...|null>}
  *
- * `Id` fields use `null` (not 0) when the catalog row's `Id` is missing —
- * 0 would be ambiguous with a real local id. The local print API resolves
- * any missing template fall-through to the product's default template.
+ * `Id` fields carry device-local catalog ids. They use `null` (not 0) when
+ * a local id is missing; the global DynamoDB row key is never a valid fallback.
+ * The local print API can then resolve by the stable product/template codes.
  */
 function buildPrintLabelPayloadJson(
   product: { id: number; code: string; name: string },
@@ -1080,7 +1080,14 @@ async function handleGetCommandDetail(
 export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
   const fnEvent = event as LambdaFunctionURLEvent;
   const awsRequestId = context?.awsRequestId;
-  console.log("ctx", { handler: "customerApi", awsRequestId });
+  console.log(
+    "ctx",
+    JSON.stringify({
+      log_type: "ctx",
+      handler: "customerApi",
+      awsRequestId
+    })
+  );
   // CORS allow-origin is a constant `*` by design — touch corsAllowsOrigin
   // to keep the symbol referenced under noUnusedLocals.
   void corsAllowsOrigin();
@@ -1240,11 +1247,14 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
     if (error instanceof CustomError) {
       logHandledErrorAction(error.code, shouldSuppress(error.code));
     }
-    console.log("unhandled_error", {
-      awsRequestId,
-      message: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined
-    });
+    console.log(
+      JSON.stringify({
+        log_type: "unhandled_error",
+        awsRequestId,
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
+      })
+    );
     console.log("RequestId FAILED");
 
     const fallback: LambdaResponse = textResponse(500, "Internal Server Error");
