@@ -7,14 +7,19 @@
     "node": ">=24"
   },
   "scripts": {
+    "lint:check": "type_check_lambdas_v3 lint:check",
+    "lint:fix": "type_check_lambdas_v3 lint:fix",
+    "format:check": "type_check_lambdas_v3 format:check",
+    "format:fix": "type_check_lambdas_v3 format:fix",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/test/smoke.test.js",
+    "deploy:prod": "npm run rebuild && lambda-upload deploy-prod dm",
+    "deploy:prod:check": "lambda-upload deploy-prod dm --check --force --assume-runtime nodejs24.x",
+    "deploy:prod:upgrade": "npm run rebuild && lambda-upload deploy-prod dm --upgrade-config",
     "build": "tsc -p tsconfig.json",
     "clean": "rimraf dist",
     "rebuild": "npm run clean && npm run build",
-    "test": "npm run build && node --test dist/test/smoke.test.js",
-    "prepackage": "npm run rebuild",
-    "deploy:prod": "npm run rebuild && lambda-upload deploy-prod dm",
-    "deploy:prod:check": "lambda-upload deploy-prod dm --check --force --assume-runtime nodejs24.x",
-    "deploy:prod:upgrade": "npm run rebuild && lambda-upload deploy-prod dm --upgrade-config"
+    "prepackage": "npm run rebuild"
   },
   "repository": {
     "type": "git",
@@ -51,9 +56,25 @@
     "deployed_accounts": []
   },
   "devDependencies": {
+    "@deliverymanager/type_check_lambdas_v3": "^1.0.13",
     "@types/aws-lambda": "^8.10.140",
     "@types/node": "^22.7.4",
     "rimraf": "^6.0.1",
     "typescript": "^5.6.2"
+  },
+  "prettier": "@deliverymanager/type_check_lambdas_v3/prettier.config.mjs",
+  "lambda_ai": {
+    "last_runs": {
+      "harden": {
+        "ran_at_utc": "2026-07-12T19:59:03.887Z",
+        "ran_at_athens": "12/07/2026 22:59:03",
+        "git_commit": "c4d4f988e94a3b1237c2992181a87e6022064613",
+        "git_commit_short": "c4d4f98",
+        "git_commit_time": "2026-07-12T22:59:03+03:00",
+        "git_branch": "codex/harden-local-catalog-ids-20260712",
+        "prompts_version": "0.8.31",
+        "repo_version": "1.0.0"
+      }
+    }
   }
 }

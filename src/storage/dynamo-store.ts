@@ -14,6 +14,7 @@
  */
 
 import type { CustomerApiOptions } from "../config";
+import { toCatalogProductIdentity, toCatalogTemplateIdentity } from "../lib/catalog-identities";
 import type {
   CatalogProductItem,
   CatalogProductLookup,
@@ -22,7 +23,7 @@ import type {
   CustomerTokenRecord,
   DeviceCommandRecord,
   DeviceRecord,
-  PrintJobItem
+  PrintJobItem,
 } from "../types";
 
 /**
@@ -102,9 +103,8 @@ interface PutItemInput {
   Item: Record<string, AttributeValue>;
 }
 
-interface PutItemOutput {
-  // empty by design — we don't request `ReturnValues` on the write path.
-}
+// Empty by design: the write path does not request ReturnValues.
+type PutItemOutput = Record<string, never>;
 
 interface DynamoCommand<TInput, TOutput> {
   readonly input: TInput;
@@ -128,7 +128,8 @@ interface DynamoSdkModule {
   PutItemCommand: DynamoCommandCtor<PutItemInput, PutItemOutput>;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// The managed Lambda runtime provides AWS SDK v3; keep it out of the bundle.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const sdk: DynamoSdkModule = require("@aws-sdk/client-dynamodb") as DynamoSdkModule;
 const { DynamoDBClient, GetItemCommand, UpdateItemCommand, ScanCommand, QueryCommand, PutItemCommand } = sdk;
 
@@ -156,11 +157,7 @@ function n(value: number): AttributeValue {
  * Lambda (`{Status}#{requestedAtUtc:O}#{Id:D20}`) so a row written here is
  * indistinguishable on the GSI from a row written by the cloud admin tool.
  */
-function buildDeviceStatusRequestedKey(
-  status: string,
-  requestedAtUtc: string,
-  id: number
-): string {
+function buildDeviceStatusRequestedKey(status: string, requestedAtUtc: string, id: number): string {
   // 20-digit zero-padded Id keeps GSI lex order monotonic across the
   // counter's full range (long.MaxValue is 19 digits).
   const padded = id.toString().padStart(20, "0");
@@ -186,10 +183,7 @@ function readNumber(item: Record<string, AttributeValue> | undefined, key: strin
  * attribute is missing or empty (so callers can omit the field from the
  * response payload per the wire spec).
  */
-function readOptionalString(
-  item: Record<string, AttributeValue> | undefined,
-  key: string
-): string | undefined {
+function readOptionalString(item: Record<string, AttributeValue> | undefined, key: string): string | undefined {
   if (!item) return undefined;
   const attr = item[key];
   if (!attr || typeof attr.S !== "string" || attr.S.length === 0) return undefined;
@@ -200,10 +194,7 @@ function readOptionalString(
  * Read a present-only string, returning `null` when the attribute is missing
  * or blank. Used for fields where the wire schema explicitly allows `null`.
  */
-function readNullableString(
-  item: Record<string, AttributeValue> | undefined,
-  key: string
-): string | null {
+function readNullableString(item: Record<string, AttributeValue> | undefined, key: string): string | null {
   if (!item) return null;
   const attr = item[key];
   if (!attr || typeof attr.S !== "string" || attr.S.length === 0) return null;
@@ -216,10 +207,7 @@ function readNullableString(
  * multiplication — the attribute string is parsed manually so values like
  * "2.5" round to 250 deterministically.
  */
-function readPriceAsCents(
-  item: Record<string, AttributeValue> | undefined,
-  key: string
-): number | undefined {
+function readPriceAsCents(item: Record<string, AttributeValue> | undefined, key: string): number | undefined {
   if (!item) return undefined;
   const attr = item[key];
   if (!attr || typeof attr.N !== "string" || attr.N.length === 0) return undefined;
@@ -243,21 +231,20 @@ export class DynamoCustomerApiStore {
     const response = await dynamoClient.send(
       new GetItemCommand({
         TableName: this.options.customerTokensTableName,
-        Key: { TokenHash: s(tokenHash) }
-      })
+        Key: { TokenHash: s(tokenHash) },
+      }),
     );
 
     const item = response.Item;
     if (!item || Object.keys(item).length === 0) return null;
 
     const storeIdsAttr = item["StoreIds"];
-    const storeIds =
-      storeIdsAttr && Array.isArray(storeIdsAttr.SS) ? [...storeIdsAttr.SS] : [];
+    const storeIds = storeIdsAttr && Array.isArray(storeIdsAttr.SS) ? [...storeIdsAttr.SS] : [];
 
     return {
       tokenHash: readString(item, "TokenHash"),
       storeIds,
-      lastUsedAtUtc: readString(item, "LastUsedAtUtc")
+      lastUsedAtUtc: readString(item, "LastUsedAtUtc"),
     };
   }
 
@@ -273,14 +260,14 @@ export class DynamoCustomerApiStore {
           Key: { TokenHash: s(tokenHash) },
           UpdateExpression: "SET LastUsedAtUtc = :now",
           ExpressionAttributeValues: {
-            ":now": s(nowIso)
+            ":now": s(nowIso),
           },
-          ReturnValues: "NONE"
-        })
+          ReturnValues: "NONE",
+        }),
       );
     } catch (err) {
       console.log("touch_last_used_failed", {
-        message: err instanceof Error ? err.message : String(err)
+        message: err instanceof Error ? err.message : String(err),
       });
     }
   }
@@ -311,7 +298,7 @@ export class DynamoCustomerApiStore {
         TableName: this.options.devicesTableName,
         FilterExpression: filterExpression,
         ExpressionAttributeNames: { "#g": "Group" },
-        ExpressionAttributeValues: expressionAttributeValues
+        ExpressionAttributeValues: expressionAttributeValues,
       };
       if (exclusiveStartKey !== undefined) {
         input.ExclusiveStartKey = exclusiveStartKey;
@@ -342,10 +329,9 @@ export class DynamoCustomerApiStore {
         // reserved word `Group`. Including DeviceCode (the partition key) on
         // the projection ensures we get a non-empty Item back even if the
         // row exists but has no Group / no metadata yet.
-        ProjectionExpression:
-          "DeviceCode, #g, DeviceName, AppVersion, LastSeenAtUtc, PendingCommands, FailedJobs",
-        ExpressionAttributeNames: { "#g": "Group" }
-      })
+        ProjectionExpression: "DeviceCode, #g, DeviceName, AppVersion, LastSeenAtUtc, PendingCommands, FailedJobs",
+        ExpressionAttributeNames: { "#g": "Group" },
+      }),
     );
 
     const item = response.Item;
@@ -361,7 +347,7 @@ export class DynamoCustomerApiStore {
       appVersion: readString(item, "AppVersion"),
       lastSeenAtUtc: readString(item, "LastSeenAtUtc"),
       pendingCommands: readNumber(item, "PendingCommands"),
-      failedJobs: readNumber(item, "FailedJobs")
+      failedJobs: readNumber(item, "FailedJobs"),
     };
   }
 
@@ -371,11 +357,7 @@ export class DynamoCustomerApiStore {
    * small in Phase 1 — the spec does not surface pagination here.
    */
   async queryProductsByDeviceCode(deviceCode: string): Promise<CatalogProductItem[]> {
-    return this.queryCatalogByDeviceCode(
-      this.options.catalogProductsTableName,
-      deviceCode,
-      toProductItem
-    );
+    return this.queryCatalogByDeviceCode(this.options.catalogProductsTableName, deviceCode, toProductItem);
   }
 
   /**
@@ -383,18 +365,10 @@ export class DynamoCustomerApiStore {
    * `LastEvaluatedKey` up to `CATALOG_PAGE_LIMIT` items total.
    */
   async queryTemplatesByDeviceCode(deviceCode: string): Promise<CatalogTemplateItem[]> {
-    return this.queryCatalogByDeviceCode(
-      this.options.catalogTemplatesTableName,
-      deviceCode,
-      toTemplateItem
-    );
+    return this.queryCatalogByDeviceCode(this.options.catalogTemplatesTableName, deviceCode, toTemplateItem);
   }
 
-  private async queryCatalogByDeviceCode<T>(
-    tableName: string,
-    deviceCode: string,
-    parse: (item: Record<string, AttributeValue>) => T
-  ): Promise<T[]> {
+  private async queryCatalogByDeviceCode<T>(tableName: string, deviceCode: string, parse: (item: Record<string, AttributeValue>) => T): Promise<T[]> {
     const collected: T[] = [];
     let exclusiveStartKey: Record<string, AttributeValue> | undefined;
 
@@ -403,7 +377,7 @@ export class DynamoCustomerApiStore {
         TableName: tableName,
         IndexName: this.options.catalogDeviceCodeIndexName,
         KeyConditionExpression: "DeviceCode = :dc",
-        ExpressionAttributeValues: { ":dc": s(deviceCode) }
+        ExpressionAttributeValues: { ":dc": s(deviceCode) },
       };
       if (exclusiveStartKey !== undefined) {
         input.ExclusiveStartKey = exclusiveStartKey;
@@ -432,7 +406,7 @@ export class DynamoCustomerApiStore {
   async queryPrintJobsByDevice(
     deviceCode: string,
     limit: number,
-    cursor: Record<string, AttributeValue> | undefined
+    cursor: Record<string, AttributeValue> | undefined,
   ): Promise<{ items: PrintJobItem[]; nextCursor: Record<string, AttributeValue> | undefined }> {
     const input: QueryInput = {
       TableName: this.options.printJobsTableName,
@@ -440,7 +414,7 @@ export class DynamoCustomerApiStore {
       KeyConditionExpression: "DeviceCode = :dc",
       ExpressionAttributeValues: { ":dc": s(deviceCode) },
       ScanIndexForward: false,
-      Limit: limit
+      Limit: limit,
     };
     if (cursor !== undefined) {
       input.ExclusiveStartKey = cursor;
@@ -450,7 +424,7 @@ export class DynamoCustomerApiStore {
     const items = (response.Items ?? []).map(toPrintJobItem);
     return {
       items,
-      nextCursor: response.LastEvaluatedKey
+      nextCursor: response.LastEvaluatedKey,
     };
   }
 
@@ -469,16 +443,8 @@ export class DynamoCustomerApiStore {
    * Returns `null` when no row matches; callers turn that into a 400 with
    * `customer_api_command_product_not_found`.
    */
-  async findProductByCode(
-    deviceCode: string,
-    productCode: string
-  ): Promise<CatalogProductLookup | null> {
-    return this.findCatalogRowByCode(
-      this.options.catalogProductsTableName,
-      deviceCode,
-      productCode,
-      toProductLookup
-    );
+  async findProductByCode(deviceCode: string, productCode: string): Promise<CatalogProductLookup | null> {
+    return this.findCatalogRowByCode(this.options.catalogProductsTableName, deviceCode, productCode, toCatalogProductIdentity);
   }
 
   /**
@@ -487,23 +453,15 @@ export class DynamoCustomerApiStore {
    * `findProductByCode`. Only called when the caller passed a non-empty
    * `templateCode` on the request body.
    */
-  async findTemplateByCode(
-    deviceCode: string,
-    templateCode: string
-  ): Promise<CatalogTemplateLookup | null> {
-    return this.findCatalogRowByCode(
-      this.options.catalogTemplatesTableName,
-      deviceCode,
-      templateCode,
-      toTemplateLookup
-    );
+  async findTemplateByCode(deviceCode: string, templateCode: string): Promise<CatalogTemplateLookup | null> {
+    return this.findCatalogRowByCode(this.options.catalogTemplatesTableName, deviceCode, templateCode, toCatalogTemplateIdentity);
   }
 
   private async findCatalogRowByCode<T>(
     tableName: string,
     deviceCode: string,
     code: string,
-    parse: (item: Record<string, AttributeValue>) => T
+    parse: (item: Record<string, AttributeValue>) => T,
   ): Promise<T | null> {
     const trimmed = code.trim();
     if (trimmed.length === 0) return null;
@@ -517,9 +475,9 @@ export class DynamoCustomerApiStore {
       KeyConditionExpression: "DeviceCode = :dc AND begins_with(CodeSortKey, :sk)",
       ExpressionAttributeValues: {
         ":dc": s(deviceCode),
-        ":sk": s(prefix)
+        ":sk": s(prefix),
       },
-      Limit: 1
+      Limit: 1,
     };
 
     const response = await dynamoClient.send(new QueryCommand(input));
@@ -545,8 +503,8 @@ export class DynamoCustomerApiStore {
         Key: { CounterName: s("DeviceCommands") },
         UpdateExpression: "ADD NextValue :one",
         ExpressionAttributeValues: { ":one": n(1) },
-        ReturnValues: "ALL_NEW"
-      })
+        ReturnValues: "ALL_NEW",
+      }),
     );
 
     const attrs = response.Attributes;
@@ -593,16 +551,14 @@ export class DynamoCustomerApiStore {
       RequestedBy: s(input.requestedBy),
       RequestedAtUtc: s(input.requestedAtUtc),
       RequestedAtEpochSeconds: n(input.requestedAtEpochSeconds),
-      DeviceStatusRequestedKey: s(
-        buildDeviceStatusRequestedKey("Pending", input.requestedAtUtc, input.id)
-      )
+      DeviceStatusRequestedKey: s(buildDeviceStatusRequestedKey("Pending", input.requestedAtUtc, input.id)),
     };
 
     await dynamoClient.send(
       new PutItemCommand({
         TableName: this.options.deviceCommandsTableName,
-        Item: item
-      })
+        Item: item,
+      }),
     );
   }
 
@@ -616,8 +572,8 @@ export class DynamoCustomerApiStore {
     const response = await dynamoClient.send(
       new GetItemCommand({
         TableName: this.options.deviceCommandsTableName,
-        Key: { Id: n(id) }
-      })
+        Key: { Id: n(id) },
+      }),
     );
 
     const item = response.Item;
@@ -627,10 +583,9 @@ export class DynamoCustomerApiStore {
 }
 
 function toProductItem(item: Record<string, AttributeValue>): CatalogProductItem {
+  const identity = toCatalogProductIdentity(item);
   const result: CatalogProductItem = {
-    id: readNumber(item, "Id"),
-    code: readString(item, "Code"),
-    name: readString(item, "Name")
+    ...identity,
   };
   const categoryName = readOptionalString(item, "CategoryName");
   if (categoryName !== undefined) result.categoryName = categoryName;
@@ -644,30 +599,13 @@ function toProductItem(item: Record<string, AttributeValue>): CatalogProductItem
 }
 
 function toTemplateItem(item: Record<string, AttributeValue>): CatalogTemplateItem {
+  const identity = toCatalogTemplateIdentity(item);
   const result: CatalogTemplateItem = {
-    id: readNumber(item, "Id"),
-    code: readString(item, "Code"),
-    name: readString(item, "Name")
+    ...identity,
   };
   const updatedAtUtc = readOptionalString(item, "LocalLastModifiedUtc");
   if (updatedAtUtc !== undefined) result.updatedAtUtc = updatedAtUtc;
   return result;
-}
-
-function toProductLookup(item: Record<string, AttributeValue>): CatalogProductLookup {
-  return {
-    id: readNumber(item, "Id"),
-    code: readString(item, "Code"),
-    name: readString(item, "Name")
-  };
-}
-
-function toTemplateLookup(item: Record<string, AttributeValue>): CatalogTemplateLookup {
-  return {
-    id: readNumber(item, "Id"),
-    code: readString(item, "Code"),
-    name: readString(item, "Name")
-  };
 }
 
 function toDeviceCommandRecord(item: Record<string, AttributeValue>): DeviceCommandRecord {
@@ -699,7 +637,7 @@ function toDeviceCommandRecord(item: Record<string, AttributeValue>): DeviceComm
     claimedAtUtc: readNullableString(item, "ClaimedAtUtc"),
     completedAtUtc: readNullableString(item, "CompletedAtUtc"),
     errorMessage: readNullableString(item, "ErrorMessage"),
-    productCode
+    productCode,
   };
 }
 
@@ -713,7 +651,7 @@ function toPrintJobItem(item: Record<string, AttributeValue>): PrintJobItem {
     errorMessage: readNullableString(item, "ErrorMessage"),
     // labelCount = Quantity — print jobs are written with Quantity defaulted
     // to 1, so 0 (missing) is treated as 1 to keep the wire schema honest.
-    labelCount: quantity > 0 ? quantity : 1
+    labelCount: quantity > 0 ? quantity : 1,
   };
   const templateCode = readOptionalString(item, "TemplateCode");
   if (templateCode !== undefined) result.templateCode = templateCode;
