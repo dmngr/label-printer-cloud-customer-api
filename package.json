@@ -73,14 +73,14 @@
   "lambda_ai": {
     "last_runs": {
       "harden": {
-        "ran_at_utc": "2026-07-12T19:59:03.887Z",
-        "ran_at_athens": "12/07/2026 22:59:03",
-        "git_commit": "c4d4f988e94a3b1237c2992181a87e6022064613",
-        "git_commit_short": "c4d4f98",
-        "git_commit_time": "2026-07-12T22:59:03+03:00",
-        "git_branch": "codex/harden-local-catalog-ids-20260712",
+        "ran_at_utc": "2026-07-16T14:56:41.274Z",
+        "ran_at_athens": "16/07/2026 17:56:41",
+        "git_commit": "de766c7b1b9f550a0946c5fe84bf5967c0ef0991",
+        "git_commit_short": "de766c7",
+        "git_commit_time": "2026-07-16T17:56:41+03:00",
+        "git_branch": "codex/policy-gates-20260716",
         "prompts_version": "0.8.31",
-        "repo_version": "1.0.0"
+        "repo_version": "1.0.1"
       }
     }
   }
