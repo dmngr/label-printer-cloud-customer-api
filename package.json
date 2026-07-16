@@ -1,6 +1,6 @@
 {
   "name": "label-printer-cloud-customer-api",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Customer-facing read-only API Lambda for the DM Label Printer customer-facing web app at app.label.ninja - exposes /api/v1/me/stores, /api/v1/me/devices and /api/v1/me/devices/{deviceCode} over a single Function URL.",
   "main": "dist/handlers/customer-api.js",
   "engines": {
@@ -58,7 +58,7 @@
         "alias": "dm",
         "account_id": "787324535455",
         "region": "eu-west-1",
-        "last_deployed_at": "2026-07-12T19:59:57.020Z"
+        "last_deployed_at": "2026-07-16T14:57:34.702Z"
       }
     ]
   },
