@@ -107,6 +107,8 @@ test("handler entrypoint compiles cleanly to dist/", async () => {
   assert.match(source, /exports\.handler\s*=/);
   // BigInt shim must survive into the compiled output.
   assert.match(source, /BigInt\.prototype/);
+  assert.match(source, /ACTION:SLACK_CTX_V1=/);
+  assert.equal(source.match(/ACTION:SLACK_CTX_V1=/g)?.length, 1);
 });
 
 test("redactDeep replaces sensitive header values but keeps the schema", async () => {

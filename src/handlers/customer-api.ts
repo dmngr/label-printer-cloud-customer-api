@@ -1080,13 +1080,16 @@ async function handleGetCommandDetail(
 export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
   const fnEvent = event as LambdaFunctionURLEvent;
   const awsRequestId = context?.awsRequestId;
+  const invocationContext = {
+    v: 1,
+    log_type: "ctx",
+    handler: "customerApi",
+    awsRequestId
+  };
+  const serializedContext = JSON.stringify(invocationContext);
+  console.log("ctx", serializedContext);
   console.log(
-    "ctx",
-    JSON.stringify({
-      log_type: "ctx",
-      handler: "customerApi",
-      awsRequestId
-    })
+    `ACTION:SLACK_CTX_V1=${Buffer.from(serializedContext, "utf8").toString("base64url")}`
   );
   // CORS allow-origin is a constant `*` by design — touch corsAllowsOrigin
   // to keep the symbol referenced under noUnusedLocals.
