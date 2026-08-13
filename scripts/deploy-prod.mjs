@@ -89,9 +89,8 @@ function getRole() {
 }
 
 function assertExclusiveAndUnmanaged(role) {
-  const consumers = (aws(["lambda", "list-functions"]).Functions ?? [])
-    .filter((fn) => fn.Role === role.Arn)
-    .map((fn) => fn.FunctionName);
+  const consumers =
+    aws(["lambda", "list-functions", "--query", `Functions[?Role=='${role.Arn}'].FunctionName`]) ?? [];
   const unexpectedConsumers = consumers.filter((name) => name !== FUNCTION_NAME);
   if (unexpectedConsumers.length > 0) {
     throw new Error(`Refusing to modify role used by other Lambdas: ${unexpectedConsumers.join(", ")}`);
