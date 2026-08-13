@@ -1,6 +1,6 @@
 {
   "name": "label-printer-cloud-customer-api",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Customer-facing read-only API Lambda for the DM Label Printer customer-facing web app at app.label.ninja - exposes /api/v1/me/stores, /api/v1/me/devices and /api/v1/me/devices/{deviceCode} over a single Function URL.",
   "main": "dist/handlers/customer-api.js",
   "engines": {
@@ -13,13 +13,14 @@
     "format:fix": "type_check_lambdas_v3 format:fix",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/smoke.test.js",
-    "deploy:prod": "npm run rebuild && lambda-upload deploy-prod dm",
-    "deploy:prod:check": "lambda-upload deploy-prod dm --check --force --assume-runtime nodejs24.x",
-    "deploy:prod:upgrade": "npm run rebuild && lambda-upload deploy-prod dm --upgrade-config",
+    "deploy:prod": "npm run package:prod && node scripts/deploy-prod.mjs",
+    "deploy:prod:check": "npm run package:prod && node scripts/deploy-prod.mjs --check",
+    "deploy:prod:upgrade": "npm run deploy:prod",
     "build": "tsc -p tsconfig.json",
     "clean": "rimraf dist",
     "rebuild": "npm run clean && npm run build",
-    "prepackage": "npm run rebuild"
+    "prepackage": "npm run rebuild",
+    "package:prod": "npm run rebuild && lambda-upload deploy-prod dm --package-only --skip-bump --force --assume-runtime nodejs24.x"
   },
   "repository": {
     "type": "git",
@@ -45,7 +46,7 @@
     "package-lock.json",
     "README.md"
   ],
-  "lambda_role": "",
+  "lambda_role": "label-printer-cloud-customer-api-role",
   "api": {
     "apiId": null,
     "stageNames": [],

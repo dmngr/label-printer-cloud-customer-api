@@ -131,14 +131,19 @@ handler.
 
 ## Deploy
 
-Follows the team's `crp-repos-harden-deploy` skill / `lambda-upload` canonical
-scripts:
+Follows the team's `crp-repos-harden-deploy` gates and a repo-local guarded
+deployment:
 
-- `npm run deploy:prod` — code-only deploy. Builds TS, then runs
-  `lambda-upload deploy-prod dm`.
-- `npm run deploy:prod:check` — local validation, no AWS calls; assumes
-  `nodejs24.x` for the AWS SDK dependency policy check.
-- `npm run deploy:prod:upgrade` — runtime + arch upgrade path.
+- `npm run deploy:prod` packages the reviewed bundle, creates or verifies
+  `label-printer-cloud-customer-api-role`, applies the exact DynamoDB/log
+  policy, and deploys only to DM account `787324535455` in `eu-west-1`.
+- `npm run deploy:prod:check` validates the package and scoped IAM documents
+  without making AWS calls.
+- The deploy merges existing environment variables, switches only this Lambda
+  from `lambda_dynamo_2`, runs a real unauthorized-token DynamoDB canary before
+  and after code upload, and restores the previous role/environment on failure.
+- Existing dedicated roles are rejected if another Lambda consumes them or if
+  they contain an unexpected managed or inline policy.
 
 The CloudFormation template (`cloudformation/stack.json`) parameterizes the
 function with `HandlerEntrypoint` defaulted to
@@ -171,7 +176,5 @@ Defaults to `emit_requestid_success: false` (no legacy Slack suppression). See
 [`dmngr/lambda-policies/handled-errors/handled-error-policy.md`](https://github.com/dmngr/lambda-policies/blob/main/handled-errors/handled-error-policy.md)
 for the contract.
 
-## Next steps (operator)
-
-1. `crp repos harden-pr label-printer-cloud-customer-api`
-2. After PR merges and you've reviewed it: `crp repos harden-deploy label-printer-cloud-customer-api --aws-profile dm --region eu-west-1`
+The deploy keeps `nodejs24.x`, `arm64`, and
+`dist/handlers/customer-api.handler` as enforced postconditions.
