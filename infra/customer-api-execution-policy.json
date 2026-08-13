@@ -1,0 +1,73 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CreateOwnLogGroup",
+      "Effect": "Allow",
+      "Action": "logs:CreateLogGroup",
+      "Resource": "arn:aws:logs:eu-west-1:787324535455:*"
+    },
+    {
+      "Sid": "WriteOwnLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:eu-west-1:787324535455:log-group:/aws/lambda/label-printer-cloud-customer-api:*"
+    },
+    {
+      "Sid": "ReadAndTouchCustomerTokens",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:UpdateItem"
+      ],
+      "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudCustomerTokens"
+    },
+    {
+      "Sid": "ReadDevices",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:Scan"
+      ],
+      "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudDevices"
+    },
+    {
+      "Sid": "QueryCatalog",
+      "Effect": "Allow",
+      "Action": "dynamodb:Query",
+      "Resource": [
+        "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudCatalogProducts",
+        "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudCatalogProducts/index/DeviceCodeIndex",
+        "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudCatalogTemplates",
+        "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudCatalogTemplates/index/DeviceCodeIndex"
+      ]
+    },
+    {
+      "Sid": "QueryPrintJobs",
+      "Effect": "Allow",
+      "Action": "dynamodb:Query",
+      "Resource": [
+        "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudPrintJobs",
+        "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudPrintJobs/index/DeviceCreatedIndex"
+      ]
+    },
+    {
+      "Sid": "AllocateCommandIds",
+      "Effect": "Allow",
+      "Action": "dynamodb:UpdateItem",
+      "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudCounters"
+    },
+    {
+      "Sid": "CreateAndReadCommands",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem"
+      ],
+      "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudDeviceCommands"
+    }
+  ]
+}
