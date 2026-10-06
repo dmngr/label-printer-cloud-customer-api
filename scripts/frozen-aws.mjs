@@ -42,7 +42,15 @@ export function createFrozenAws({
       service === "iam" || service === "cloudfront" ? `https://${service}.amazonaws.com` : `https://${service}.${region}.amazonaws.com`;
     const output = run(
       "aws",
-      [...args, "--region", region, "--endpoint-url", endpoint, "--no-cli-pager", ...(json ? ["--output", "json"] : [])],
+      [
+        ...args,
+        "--region",
+        service === "iam" || service === "cloudfront" ? "us-east-1" : region,
+        "--endpoint-url",
+        endpoint,
+        "--no-cli-pager",
+        ...(json ? ["--output", "json"] : []),
+      ],
       options,
     ).trim();
     return json && output ? JSON.parse(output) : output;
