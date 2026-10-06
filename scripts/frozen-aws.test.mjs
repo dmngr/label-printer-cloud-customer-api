@@ -14,10 +14,15 @@ test("profile credentials resolve once; writes recheck identity without child pr
   const aws = createFrozenAws({ run, environment: {} });
   aws(["lambda", "get-function-configuration", "--function-name", "fixture"]);
   aws(["lambda", "update-function-code", "--function-name", "fixture"]);
+  aws(["iam", "put-role-policy", "--role-name", "fixture"]);
+  aws(["cloudfront", "create-invalidation", "--distribution-id", "fixture"]);
   assert.equal(calls.filter(c => c.args[0] === "configure").length, 1);
-  assert.equal(calls.filter(c => c.args[0] === "sts").length, 2);
+  assert.equal(calls.filter(c => c.args[0] === "sts").length, 4);
   assert.ok(calls.slice(1).every(c => !c.args.includes("--profile") && c.env.AWS_SESSION_TOKEN === "fixture-session"));
   assert.ok(calls.slice(1).every(c => c.args.includes("--endpoint-url")));
+  for (const call of calls.filter(c => ["iam", "cloudfront", "lambda"].includes(c.args[0]))) {
+    assert.equal(call.args[call.args.indexOf("--region") + 1], call.args[0] === "lambda" ? "eu-west-1" : "us-east-1");
+  }
   assert.throws(() => aws(["s3", "sync", "a", "b", "--delete"]), /Unsafe/);
   assert.throws(() => aws(["lambda", "list-functions", "--profile", "other"]), /override/);
 });
