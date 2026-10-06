@@ -25,15 +25,15 @@ export function toCatalogProductIdentity(item: CatalogIdentityItem): CatalogProd
     // Id is the global DynamoDB row key. Device commands must use the local id.
     id: readNumber(item, "LocalProductId"),
     code: readString(item, "Code"),
-    name: readString(item, "Name")
+    name: readString(item, "Name"),
   };
 }
 
-export function toCatalogTemplateIdentity(item: CatalogIdentityItem): CatalogTemplateLookup {
+export function toCatalogTemplateIdentity(item: CatalogIdentityItem): Pick<CatalogTemplateLookup, "id" | "code" | "name"> {
   return {
     // Never fall back to Id: it may target an unrelated local template.
     id: readNumber(item, "LocalTemplateId"),
     code: readString(item, "Code"),
-    name: readString(item, "Name")
+    name: readString(item, "Name"),
   };
 }

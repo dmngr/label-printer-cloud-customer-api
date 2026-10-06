@@ -329,7 +329,8 @@ export class DynamoCustomerApiStore {
         // reserved word `Group`. Including DeviceCode (the partition key) on
         // the projection ensures we get a non-empty Item back even if the
         // row exists but has no Group / no metadata yet.
-        ProjectionExpression: "DeviceCode, #g, DeviceName, AppVersion, LastSeenAtUtc, PendingCommands, FailedJobs",
+        ProjectionExpression:
+          "DeviceCode, #g, StoreCode, InstallationId, HostName, PrintersJson, PrintersReportedAtUtc, DeviceName, AppVersion, LastSeenAtUtc, PendingCommands, FailedJobs",
         ExpressionAttributeNames: { "#g": "Group" },
       }),
     );
@@ -343,6 +344,11 @@ export class DynamoCustomerApiStore {
     return {
       deviceCode: readString(item, "DeviceCode"),
       storeId: readString(item, "Group"),
+      storeCode: readString(item, "StoreCode"),
+      installationId: readNullableString(item, "InstallationId"),
+      hostName: readNullableString(item, "HostName"),
+      printers: readNullableString(item, "PrintersJson") ? (JSON.parse(readString(item, "PrintersJson")) as DeviceRecord["printers"]) : null,
+      printersReportedAtUtc: readNullableString(item, "PrintersReportedAtUtc"),
       deviceName: readString(item, "DeviceName"),
       appVersion: readString(item, "AppVersion"),
       lastSeenAtUtc: readString(item, "LastSeenAtUtc"),
@@ -454,7 +460,13 @@ export class DynamoCustomerApiStore {
    * `templateCode` on the request body.
    */
   async findTemplateByCode(deviceCode: string, templateCode: string): Promise<CatalogTemplateLookup | null> {
-    return this.findCatalogRowByCode(this.options.catalogTemplatesTableName, deviceCode, templateCode, toCatalogTemplateIdentity);
+    return this.findCatalogRowByCode(this.options.catalogTemplatesTableName, deviceCode, templateCode, item => ({
+      ...toCatalogTemplateIdentity(item),
+      width: Number(item.Width?.N ?? 0),
+      height: Number(item.Height?.N ?? 0),
+      layoutJson: readString(item, "LayoutJson"),
+      isActive: item.IsActive?.BOOL ?? true,
+    }));
   }
 
   private async findCatalogRowByCode<T>(
@@ -602,6 +614,12 @@ function toTemplateItem(item: Record<string, AttributeValue>): CatalogTemplateIt
   const identity = toCatalogTemplateIdentity(item);
   const result: CatalogTemplateItem = {
     ...identity,
+    layoutJson: readString(item, "LayoutJson"),
+    width: Number(item.Width?.N ?? 0),
+    height: Number(item.Height?.N ?? 0),
+    printerName: readString(item, "PrinterName"),
+    isActive: item.IsActive?.BOOL ?? true,
+    displayOrder: readNumber(item, "DisplayOrder"),
   };
   const updatedAtUtc = readOptionalString(item, "LocalLastModifiedUtc");
   if (updatedAtUtc !== undefined) result.updatedAtUtc = updatedAtUtc;

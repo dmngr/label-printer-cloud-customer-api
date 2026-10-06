@@ -1,7 +1,7 @@
 {
   "name": "label-printer-cloud-customer-api",
-  "version": "1.0.4",
-  "description": "Customer-facing read-only API Lambda for the DM Label Printer customer-facing web app at app.label.ninja - exposes /api/v1/me/stores, /api/v1/me/devices and /api/v1/me/devices/{deviceCode} over a single Function URL.",
+  "version": "1.0.5",
+  "description": "Authenticated customer catalog, print commands and versioned group template library for app.label.ninja.",
   "main": "dist/handlers/customer-api.js",
   "engines": {
     "node": ">=24"
@@ -12,7 +12,7 @@
     "format:check": "type_check_lambdas_v3 format:check",
     "format:fix": "type_check_lambdas_v3 format:fix",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist/test/smoke.test.js",
+    "test": "npm run build && node --test dist/test/*.test.js scripts/*.test.mjs",
     "deploy:prod": "npm run package:prod && node scripts/deploy-prod.mjs",
     "deploy:prod:check": "npm run package:prod && node scripts/deploy-prod.mjs --check",
     "deploy:prod:upgrade": "npm run deploy:prod",
@@ -20,7 +20,7 @@
     "clean": "rimraf dist",
     "rebuild": "npm run clean && npm run build",
     "prepackage": "npm run rebuild",
-    "package:prod": "npm run rebuild && lambda-upload deploy-prod dm --package-only --skip-bump --force --assume-runtime nodejs24.x"
+    "package:prod": "npm run rebuild && lambda-upload --package-only --skip-bump --no-fix --assume-runtime nodejs24.x"
   },
   "repository": {
     "type": "git",
@@ -39,13 +39,7 @@
   },
   "homepage": "https://github.com/dmngr/label-printer-cloud-customer-api#readme",
   "no_api": true,
-  "files": [
-    "dist",
-    "custom_errors.policy.json",
-    "package.json",
-    "package-lock.json",
-    "README.md"
-  ],
+  "files": [],
   "lambda_role": "label-printer-cloud-customer-api-role",
   "api": {
     "apiId": null,
@@ -64,7 +58,7 @@
     ]
   },
   "devDependencies": {
-    "@deliverymanager/type_check_lambdas_v3": "^1.0.13",
+    "@deliverymanager/type_check_lambdas_v3": "1.0.17",
     "@types/aws-lambda": "^8.10.140",
     "@types/node": "^22.7.4",
     "rimraf": "^6.0.1",

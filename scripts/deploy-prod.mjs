@@ -1,8 +1,9 @@
-import { execFileSync } from "node:child_process";
+import { createFrozenAws } from "./frozen-aws.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 const EXPECTED_ACCOUNT = "787324535455";
 const EXPECTED_REGION = "eu-west-1";
@@ -13,6 +14,7 @@ const HANDLER = "dist/handlers/customer-api.handler";
 const SHARED_ROLE_NAME = "lambda_dynamo_2";
 
 const EXPECTED_ENVIRONMENT = Object.freeze({
+  DM_LABEL_PRINTER_CLOUD_TEMPLATE_LIBRARY_TABLE: "DMLabelPrinterCloudTemplateLibrary",
   DM_LABEL_PRINTER_CLOUD_DEVICES_TABLE: "DMLabelPrinterCloudDevices",
   DM_LABEL_PRINTER_CLOUD_CUSTOMER_TOKENS_TABLE: "DMLabelPrinterCloudCustomerTokens",
   DM_LABEL_PRINTER_CLOUD_CATALOG_PRODUCTS_TABLE: "DMLabelPrinterCloudCatalogProducts",
@@ -33,13 +35,10 @@ const profile = process.env.AWS_PROFILE?.trim() || "dm";
 const region = process.env.AWS_REGION?.trim() || process.env.AWS_DEFAULT_REGION?.trim() || EXPECTED_REGION;
 const checkOnly = process.argv.includes("--check");
 
-function aws(args, { json = true } = {}) {
-  const output = execFileSync(
-    "aws",
-    [...args, "--profile", profile, "--region", region, "--no-cli-pager", ...(json ? ["--output", "json"] : [])],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  ).trim();
-  return json && output ? JSON.parse(output) : output;
+let frozenAws;
+function aws(args, options = {}) {
+  frozenAws ??= createFrozenAws({ profile, region, expectedAccount: EXPECTED_ACCOUNT });
+  return frozenAws(args, options);
 }
 
 function fileArgument(prefix, targetPath) {
@@ -55,10 +54,10 @@ function assertPolicyIsScoped(policyPath) {
   for (const statement of policy.Statement ?? []) {
     const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];
     const resources = Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource];
-    if (actions.some((action) => typeof action !== "string" || action.includes("*"))) {
+    if (actions.some(action => typeof action !== "string" || action.includes("*"))) {
       throw new Error(`Wildcard or invalid action in ${policyPath}`);
     }
-    if (resources.some((resource) => resource === "*" || typeof resource !== "string")) {
+    if (resources.some(resource => resource === "*" || typeof resource !== "string")) {
       throw new Error(`Unscoped resource in ${policyPath}`);
     }
   }
@@ -89,18 +88,17 @@ function getRole() {
 }
 
 function assertExclusiveAndUnmanaged(role) {
-  const consumers =
-    aws(["lambda", "list-functions", "--query", `Functions[?Role=='${role.Arn}'].FunctionName`]) ?? [];
-  const unexpectedConsumers = consumers.filter((name) => name !== FUNCTION_NAME);
+  const consumers = aws(["lambda", "list-functions", "--query", `Functions[?Role=='${role.Arn}'].FunctionName`]) ?? [];
+  const unexpectedConsumers = consumers.filter(name => name !== FUNCTION_NAME);
   if (unexpectedConsumers.length > 0) {
     throw new Error(`Refusing to modify role used by other Lambdas: ${unexpectedConsumers.join(", ")}`);
   }
   const attached = aws(["iam", "list-attached-role-policies", "--role-name", ROLE_NAME]).AttachedPolicies ?? [];
   if (attached.length > 0) {
-    throw new Error(`Unexpected managed policies on ${ROLE_NAME}: ${attached.map((policy) => policy.PolicyName).join(", ")}`);
+    throw new Error(`Unexpected managed policies on ${ROLE_NAME}: ${attached.map(policy => policy.PolicyName).join(", ")}`);
   }
   const inline = aws(["iam", "list-role-policies", "--role-name", ROLE_NAME]).PolicyNames ?? [];
-  const unexpectedInline = inline.filter((name) => name !== POLICY_NAME);
+  const unexpectedInline = inline.filter(name => name !== POLICY_NAME);
   if (unexpectedInline.length > 0) {
     throw new Error(`Unexpected inline policies on ${ROLE_NAME}: ${unexpectedInline.join(", ")}`);
   }
@@ -229,6 +227,16 @@ if (identity.Account !== EXPECTED_ACCOUNT) {
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "customer-api-deploy-"));
 const before = aws(["lambda", "get-function-configuration", "--function-name", FUNCTION_NAME]);
 const beforeEnvironment = { ...(before.Environment?.Variables ?? {}) };
+const libraryTable = aws(["dynamodb", "describe-table", "--table-name", EXPECTED_ENVIRONMENT.DM_LABEL_PRINTER_CLOUD_TEMPLATE_LIBRARY_TABLE]).Table;
+if (
+  libraryTable?.TableStatus !== "ACTIVE" ||
+  !isDeepStrictEqual(libraryTable.KeySchema, [
+    { AttributeName: "GroupId", KeyType: "HASH" },
+    { AttributeName: "ItemKey", KeyType: "RANGE" },
+  ])
+) {
+  throw new Error("Deploy the shared template library table before deploying the customer API");
+}
 let roleChanged = false;
 
 try {
@@ -256,6 +264,10 @@ try {
     ],
     6,
   );
+  const configured = aws(["lambda", "get-function-configuration", "--function-name", FUNCTION_NAME]);
+  if (!isDeepStrictEqual(configured.Environment?.Variables ?? {}, nextEnvironment)) {
+    throw new Error("Full environment readback mismatch; code was not deployed");
+  }
   // Exercise DynamoDB GetItem before replacing code; failure restores the old role/config.
   invokeUnauthorizedCanary(tempDir);
 
@@ -277,7 +289,8 @@ try {
     after.Role !== roleArn ||
     after.Runtime !== "nodejs24.x" ||
     after.Architectures?.[0] !== "arm64" ||
-    after.Handler !== HANDLER
+    after.Handler !== HANDLER ||
+    !isDeepStrictEqual(after.Environment?.Variables ?? {}, nextEnvironment)
   ) {
     throw new Error("Post-deploy configuration verification failed");
   }

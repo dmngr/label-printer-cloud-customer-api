@@ -1,5 +1,5 @@
 /**
- * `customerApi` Lambda handler — read-only customer-facing API.
+ * `customerApi` Lambda: customer catalog, print commands and versioned group templates.
  *
  * Single Function URL Lambda that routes internally between these GET paths:
  *
@@ -16,6 +16,13 @@
  *
  *   POST /api/v1/me/devices/{deviceCode}/commands           -> queue print-label command
  *   GET  /api/v1/me/devices/{deviceCode}/commands/{id}      -> command status detail
+ *   GET  /api/v1/me/groups                                -> actual store/install hierarchy
+ *   GET/POST /api/v1/me/groups/{group}/templates/{id}      -> immutable versions
+ *   GET/POST /api/v1/me/groups/{group}/{stores|installations}/{target}/assignment
+ *
+ * Template library storage is DM_LABEL_PRINTER_CLOUD_TEMPLATE_LIBRARY_TABLE.
+ * Every group path is authorized against the existing token's StoreIds grants,
+ * which retain their legacy GROUP meaning. New library state never replaces tokens.
  *
  * Auth is strict: every non-OPTIONS request MUST present a customer bearer
  * (`Authorization: Bearer <token>`) that resolves to a row in the
@@ -42,18 +49,12 @@ import type { APIGatewayProxyHandlerV2, LambdaFunctionURLEvent } from "aws-lambd
 
 import { loadOptions, type CustomerApiOptions } from "../config";
 import { extractBearer, sha256Hex } from "../lib/bearer-authorizer";
-import {
-  jsonResponse,
-  noContentResponse,
-  textResponse,
-  type LambdaResponse
-} from "../lib/http-results";
-import {
-  CustomError,
-  logHandledErrorAction,
-  redactDeep,
-  shouldSuppress
-} from "../lib/handled-errors";
+import { jsonResponse, noContentResponse, textResponse, type LambdaResponse } from "../lib/http-results";
+import { CustomError, logHandledErrorAction, redactDeep, shouldSuppress } from "../lib/handled-errors";
+import { libraryRoute } from "../lib/library-routes";
+import { LibraryError, TemplateLibrary } from "../lib/template-library";
+import { bindTemplateInputs, readTemplateInputs } from "../lib/template-inputs";
+import { DynamoTemplateLibraryTable } from "../storage/template-library-table";
 import { DynamoCustomerApiStore } from "../storage/dynamo-store";
 import type {
   CatalogProductsResponse,
@@ -68,7 +69,7 @@ import type {
   PrintJobsResponse,
   StoreDevicesGroup,
   StoreSummary,
-  StoresResponse
+  StoresResponse,
 } from "../types";
 
 const STORES_PATH = "/api/v1/me/stores";
@@ -93,7 +94,7 @@ const SUPPORTED_COMMAND_TYPES: ReadonlySet<string> = new Set([
   COMMAND_TYPE_UPSERT_PRODUCT,
   COMMAND_TYPE_DELETE_PRODUCT,
   COMMAND_TYPE_UPSERT_TEMPLATE,
-  COMMAND_TYPE_DELETE_TEMPLATE
+  COMMAND_TYPE_DELETE_TEMPLATE,
 ]);
 
 const DEFAULT_COMMAND_QUANTITY = 1;
@@ -175,9 +176,7 @@ interface AuthFailure {
 
 type AuthOutcome = { kind: "ok"; caller: AuthorizedCaller } | { kind: "fail"; failure: AuthFailure };
 
-type EnsureDeviceOutcome =
-  | { kind: "ok"; record: DeviceRecord }
-  | { kind: "fail"; response: LambdaResponse; errorCode: string };
+type EnsureDeviceOutcome = { kind: "ok"; record: DeviceRecord } | { kind: "fail"; response: LambdaResponse; errorCode: string };
 
 /**
  * Resolve a device by code and verify its `Group` is in the caller's
@@ -188,13 +187,13 @@ type EnsureDeviceOutcome =
 async function ensureAuthorizedDevice(
   store: DynamoCustomerApiStore,
   storeIds: ReadonlyArray<string>,
-  deviceCode: string
+  deviceCode: string,
 ): Promise<EnsureDeviceOutcome> {
   if (deviceCode.length === 0) {
     return {
       kind: "fail",
       response: textResponse(404, "Not found"),
-      errorCode: "customer_api_device_not_found"
+      errorCode: "customer_api_device_not_found",
     };
   }
 
@@ -203,7 +202,7 @@ async function ensureAuthorizedDevice(
     return {
       kind: "fail",
       response: textResponse(404, "Device not found"),
-      errorCode: "customer_api_device_not_found"
+      errorCode: "customer_api_device_not_found",
     };
   }
 
@@ -212,25 +211,22 @@ async function ensureAuthorizedDevice(
     return {
       kind: "fail",
       response: textResponse(403, "Forbidden"),
-      errorCode: "customer_api_forbidden_store"
+      errorCode: "customer_api_forbidden_store",
     };
   }
 
   return { kind: "ok", record };
 }
 
-async function authorizeRequest(
-  event: LambdaFunctionURLEvent,
-  store: DynamoCustomerApiStore
-): Promise<AuthOutcome> {
+async function authorizeRequest(event: LambdaFunctionURLEvent, store: DynamoCustomerApiStore): Promise<AuthOutcome> {
   const extracted = extractBearer(event);
   if (extracted.kind === "missing") {
     return {
       kind: "fail",
       failure: {
         response: textResponse(401, "Missing Authorization header"),
-        errorCode: "customer_api_unauthorized"
-      }
+        errorCode: "customer_api_unauthorized",
+      },
     };
   }
   if (extracted.kind === "invalid") {
@@ -238,8 +234,8 @@ async function authorizeRequest(
       kind: "fail",
       failure: {
         response: textResponse(401, "Invalid Authorization header"),
-        errorCode: "customer_api_invalid_token"
-      }
+        errorCode: "customer_api_invalid_token",
+      },
     };
   }
 
@@ -250,19 +246,19 @@ async function authorizeRequest(
       kind: "fail",
       failure: {
         response: textResponse(401, "Invalid bearer token"),
-        errorCode: "customer_api_token_not_found"
-      }
+        errorCode: "customer_api_token_not_found",
+      },
     };
   }
 
-  const storeIds = tokenRow.storeIds.filter((s) => typeof s === "string" && s.trim().length > 0);
+  const storeIds = tokenRow.storeIds.filter(s => typeof s === "string" && s.trim().length > 0);
   if (storeIds.length === 0) {
     return {
       kind: "fail",
       failure: {
         response: textResponse(409, "Token has no authorized stores"),
-        errorCode: "customer_api_token_no_stores"
-      }
+        errorCode: "customer_api_token_no_stores",
+      },
     };
   }
 
@@ -286,11 +282,7 @@ function isWithinMinutes(timestampIso: string, minutes: number, nowMs: number): 
   return diffMs <= minutes * 60_000;
 }
 
-function toDeviceSummary(
-  record: DeviceRecord,
-  options: CustomerApiOptions,
-  nowMs: number
-): DeviceSummary {
+function toDeviceSummary(record: DeviceRecord, options: CustomerApiOptions, nowMs: number): DeviceSummary {
   const deviceName = record.deviceName.trim().length > 0 ? record.deviceName : record.deviceCode;
   return {
     deviceCode: record.deviceCode,
@@ -300,7 +292,7 @@ function toDeviceSummary(
     isActive: isActive(record, options, nowMs),
     isOnline: isOnline(record, options, nowMs),
     pendingCommands: record.pendingCommands,
-    failedJobs: record.failedJobs
+    failedJobs: record.failedJobs,
   };
 }
 
@@ -308,7 +300,7 @@ function buildStoresResponse(
   storeIds: ReadonlyArray<string>,
   records: ReadonlyArray<DeviceRecord>,
   options: CustomerApiOptions,
-  nowMs: number
+  nowMs: number,
 ): StoresResponse {
   const byStore = new Map<string, DeviceRecord[]>();
   for (const storeId of storeIds) {
@@ -329,7 +321,7 @@ function buildStoresResponse(
     stores.push({
       storeId,
       deviceCount: bucket.length,
-      onlineCount
+      onlineCount,
     });
   }
   return { stores };
@@ -339,7 +331,7 @@ function buildDevicesResponse(
   storeIds: ReadonlyArray<string>,
   records: ReadonlyArray<DeviceRecord>,
   options: CustomerApiOptions,
-  nowMs: number
+  nowMs: number,
 ): DevicesResponse {
   const byStore = new Map<string, DeviceSummary[]>();
   for (const storeId of storeIds) {
@@ -354,7 +346,7 @@ function buildDevicesResponse(
   for (const storeId of storeIds) {
     groups.push({
       storeId,
-      devices: byStore.get(storeId) ?? []
+      devices: byStore.get(storeId) ?? [],
     });
   }
   return { stores: groups };
@@ -505,7 +497,8 @@ function parseJobsQuery(rawQuery: Record<string, string | undefined> | undefined
 
 interface ParsedPrintLabelBody {
   commandType: typeof COMMAND_TYPE_PRINT_LABEL;
-  productCode: string;
+  productCode: string | null;
+  fields: Record<string, string | null>;
   templateCode: string | null;
   quantity: number;
 }
@@ -542,11 +535,7 @@ interface ParsedDeleteTemplateBody {
 }
 
 type ParsedCreateCommandBody =
-  | ParsedPrintLabelBody
-  | ParsedUpsertProductBody
-  | ParsedDeleteProductBody
-  | ParsedUpsertTemplateBody
-  | ParsedDeleteTemplateBody;
+  ParsedPrintLabelBody | ParsedUpsertProductBody | ParsedDeleteProductBody | ParsedUpsertTemplateBody | ParsedDeleteTemplateBody;
 
 /**
  * Strict validation of the `POST /commands` request body. Throws a
@@ -616,14 +605,25 @@ function parseCreateCommandBody(rawBody: string | undefined): ParsedCreateComman
   }
 }
 
+export function supportsTemplatePrinting(version: string, minimumPatch = 99): boolean {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:$|[.+-])/.exec(version);
+  if (!match) return false;
+  const [major, minor, patch] = match.slice(1).map(Number);
+  return major > 1 || (major === 1 && (minor > 0 || patch >= minimumPatch));
+}
+function commandValidationFailure(code: string, status: number): LambdaResponse {
+  const suppressed = shouldSuppress(code);
+  logHandledErrorAction(code, suppressed);
+  if (suppressed) console.log("RequestId SUCCESS");
+  return textResponse(status, code);
+}
+
 function parsePrintLabelBody(body: CreateCommandRequestBody): ParsedPrintLabelBody {
-  if (typeof body.productCode !== "string" || body.productCode.trim().length === 0) {
-    // Treat a missing productCode as a body validation issue (caller
-    // discoverability) — the explicit "product not found" code is reserved
-    // for "field present but didn't resolve".
-    throw new CustomError("customer_api_command_invalid_body");
+  let productCode: string | null = null;
+  if (body.productCode !== undefined && body.productCode !== null) {
+    if (typeof body.productCode !== "string" || !body.productCode.trim()) throw new CustomError("customer_api_command_invalid_body");
+    productCode = body.productCode.trim();
   }
-  const productCode = body.productCode.trim();
 
   let templateCode: string | null = null;
   if (body.templateCode !== undefined && body.templateCode !== null) {
@@ -647,7 +647,14 @@ function parsePrintLabelBody(body: CreateCommandRequestBody): ParsedPrintLabelBo
     quantity = body.quantity;
   }
 
-  return { commandType: COMMAND_TYPE_PRINT_LABEL, productCode, templateCode, quantity };
+  if (productCode === null && templateCode === null) throw new CustomError("customer_api_command_invalid_body");
+  let fields: Record<string, string | null>;
+  try {
+    fields = bindTemplateInputs([], body.fields);
+  } catch {
+    throw new CustomError("customer_api_command_invalid_body");
+  }
+  return { commandType: COMMAND_TYPE_PRINT_LABEL, productCode, templateCode, quantity, fields };
 }
 
 /**
@@ -732,7 +739,7 @@ function parseUpsertProductBody(body: CreateCommandRequestBody): ParsedUpsertPro
 
   return {
     commandType: COMMAND_TYPE_UPSERT_PRODUCT,
-    product: { id, code, name, categoryName, priceCents }
+    product: { id, code, name, categoryName, priceCents },
   };
 }
 
@@ -775,7 +782,7 @@ function parseUpsertTemplateBody(body: CreateCommandRequestBody): ParsedUpsertTe
 
   return {
     commandType: COMMAND_TYPE_UPSERT_TEMPLATE,
-    template: { id, code, name, body: bodyText }
+    template: { id, code, name, body: bodyText },
   };
 }
 
@@ -818,18 +825,26 @@ function readRequestBody(event: LambdaFunctionURLEvent): string | undefined {
  * The local print API can then resolve by the stable product/template codes.
  */
 function buildPrintLabelPayloadJson(
-  product: { id: number; code: string; name: string },
-  template: { id: number; code: string; name: string } | null,
-  quantity: number
+  product: { id: number; code: string; name: string } | null,
+  template: { id: number; code: string; name: string; width: number; height: number; layoutJson: string } | null,
+  quantity: number,
+  fields: Record<string, string | null>,
+  includeExpectation: boolean,
 ): string {
   const payload: Record<string, unknown> = {
-    ProductId: product.id > 0 ? product.id : null,
-    ProductCode: product.code,
-    ProductName: product.name,
+    ProductId: product && product.id > 0 ? product.id : null,
+    ProductCode: product?.code ?? null,
+    ProductName: product?.name ?? null,
+    Fields: fields,
     Quantity: quantity,
     TemplateId: template !== null && template.id > 0 ? template.id : null,
     TemplateCode: template !== null ? template.code : null,
-    TemplateName: template !== null ? template.name : null
+    TemplateName: template !== null ? template.name : null,
+    // 1.0.99 ignored this field when hashing receipts. Keep its queued payloads
+    // unchanged so an upgrade can still replay their existing acceptance receipt.
+    ...(template && includeExpectation
+      ? { ExpectedTemplate: { Width: template.width, Height: template.height, LayoutJson: template.layoutJson } }
+      : {}),
   };
   return JSON.stringify(payload);
 }
@@ -858,7 +873,7 @@ function buildUpsertProductPayloadJson(product: ParsedUpsertProductBody["product
     Code: product.code,
     Name: product.name,
     CategoryName: product.categoryName,
-    Price: price
+    Price: price,
   };
   return JSON.stringify(payload);
 }
@@ -869,14 +884,12 @@ function buildUpsertProductPayloadJson(product: ParsedUpsertProductBody["product
  *
  *   { "Id": <long|null>, "Code": "...", "Name": "...", "Body": "..." }
  */
-function buildUpsertTemplatePayloadJson(
-  template: ParsedUpsertTemplateBody["template"]
-): string {
+function buildUpsertTemplatePayloadJson(template: ParsedUpsertTemplateBody["template"]): string {
   const payload: Record<string, unknown> = {
     Id: template.id !== null && template.id > 0 ? template.id : null,
     Code: template.code,
     Name: template.name,
-    Body: template.body
+    Body: template.body,
   };
   return JSON.stringify(payload);
 }
@@ -898,11 +911,7 @@ function buildDeleteByIdPayloadJson(id: number): string {
  */
 function encodeCursor(key: Record<string, unknown>): string {
   const json = JSON.stringify(key);
-  return Buffer.from(json, "utf8")
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
+  return Buffer.from(json, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 function decodeCursor(encoded: string): Record<string, unknown> {
@@ -938,15 +947,14 @@ function isDevicesListPath(rawPath: string): boolean {
  * branching at the queue layer.
  *
  * The caller is `RequestedBy` = `customer-api:<TokenHash[:16]>` — never the
- * full hash. The device's `StoreCode` is copied from the device row's
- * `Group` attribute (per the schema sample) so the cloud admin tooling that
- * filters by store sees customer-issued commands the same as device-issued.
+ * full hash. StoreCode is the physical store from the authorized device row;
+ * the legacy token StoreIds grant access to GROUPS, never arbitrary stores.
  */
 async function handleCreateCommand(
   store: DynamoCustomerApiStore,
   device: DeviceRecord,
   callerTokenHash: string,
-  rawBody: string | undefined
+  rawBody: string | undefined,
 ): Promise<LambdaResponse> {
   let parsedBody: ParsedCreateCommandBody;
   try {
@@ -964,30 +972,35 @@ async function handleCreateCommand(
 
   switch (parsedBody.commandType) {
     case COMMAND_TYPE_PRINT_LABEL: {
-      const product = await store.findProductByCode(device.deviceCode, parsedBody.productCode);
-      if (product === null) {
-        logHandledErrorAction(
-          "customer_api_command_product_not_found",
-          shouldSuppress("customer_api_command_product_not_found")
-        );
+      const product = parsedBody.productCode === null ? null : await store.findProductByCode(device.deviceCode, parsedBody.productCode);
+      if (parsedBody.productCode !== null && product === null) {
+        logHandledErrorAction("customer_api_command_product_not_found", shouldSuppress("customer_api_command_product_not_found"));
         return textResponse(400, "customer_api_command_product_not_found");
       }
 
-      let template: { id: number; code: string; name: string } | null = null;
+      let template: Awaited<ReturnType<DynamoCustomerApiStore["findTemplateByCode"]>> = null;
       if (parsedBody.templateCode !== null) {
         const lookedUp = await store.findTemplateByCode(device.deviceCode, parsedBody.templateCode);
-        if (lookedUp === null) {
-          logHandledErrorAction(
-            "customer_api_command_template_not_found",
-            shouldSuppress("customer_api_command_template_not_found")
-          );
+        if (lookedUp === null || !lookedUp.isActive) {
+          logHandledErrorAction("customer_api_command_template_not_found", shouldSuppress("customer_api_command_template_not_found"));
           return textResponse(400, "customer_api_command_template_not_found");
         }
         template = lookedUp;
       }
 
-      payloadJson = buildPrintLabelPayloadJson(product, template, parsedBody.quantity);
-      responseProductCode = product.code;
+      if (!product && !supportsTemplatePrinting(device.appVersion)) {
+        return commandValidationFailure("customer_api_agent_update_required", 409);
+      }
+      let fields = parsedBody.fields;
+      try {
+        if (template && (!product || Object.hasOwn(JSON.parse(template.layoutJson || "{}"), "inputs"))) {
+          fields = bindTemplateInputs(readTemplateInputs(template.layoutJson), { ...(product ? { productName: product.name } : {}), ...fields });
+        }
+      } catch {
+        return commandValidationFailure("customer_api_command_invalid_inputs", 400);
+      }
+      payloadJson = buildPrintLabelPayloadJson(product, template, parsedBody.quantity, fields, supportsTemplatePrinting(device.appVersion, 100));
+      responseProductCode = product?.code ?? null;
       break;
     }
     case COMMAND_TYPE_UPSERT_PRODUCT: {
@@ -1022,12 +1035,12 @@ async function handleCreateCommand(
   await store.putPendingDeviceCommand({
     id,
     deviceCode: device.deviceCode,
-    storeCode: device.storeId,
+    storeCode: device.storeCode,
     commandType: parsedBody.commandType,
     payloadJson,
     requestedBy,
     requestedAtUtc,
-    requestedAtEpochSeconds
+    requestedAtEpochSeconds,
   });
 
   const responseBody: CreateCommandResponse = {
@@ -1035,7 +1048,7 @@ async function handleCreateCommand(
     status: "Pending",
     requestedAtUtc,
     commandType: parsedBody.commandType,
-    productCode: responseProductCode
+    productCode: responseProductCode,
   };
   console.log("RequestId SUCCESS");
   return jsonResponse(201, responseBody);
@@ -1049,17 +1062,10 @@ async function handleCreateCommand(
  * the path-parameter device — this prevents a caller from probing other
  * stores' commands by guessing Ids.
  */
-async function handleGetCommandDetail(
-  store: DynamoCustomerApiStore,
-  device: DeviceRecord,
-  commandId: number
-): Promise<LambdaResponse> {
+async function handleGetCommandDetail(store: DynamoCustomerApiStore, device: DeviceRecord, commandId: number): Promise<LambdaResponse> {
   const record = await store.getDeviceCommandById(commandId);
   if (record === null || record.deviceCode !== device.deviceCode) {
-    logHandledErrorAction(
-      "customer_api_command_not_found",
-      shouldSuppress("customer_api_command_not_found")
-    );
+    logHandledErrorAction("customer_api_command_not_found", shouldSuppress("customer_api_command_not_found"));
     return textResponse(404, "Not found");
   }
 
@@ -1071,7 +1077,7 @@ async function handleGetCommandDetail(
     claimedAtUtc: record.claimedAtUtc,
     completedAtUtc: record.completedAtUtc,
     productCode: record.productCode,
-    errorMessage: record.errorMessage
+    errorMessage: record.errorMessage,
   };
   console.log("RequestId SUCCESS");
   return jsonResponse(200, payload);
@@ -1084,13 +1090,11 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
     v: 1,
     log_type: "ctx",
     handler: "customerApi",
-    awsRequestId
+    awsRequestId,
   };
   const serializedContext = JSON.stringify(invocationContext);
   console.log("ctx", serializedContext);
-  console.log(
-    `ACTION:SLACK_CTX_V1=${Buffer.from(serializedContext, "utf8").toString("base64url")}`
-  );
+  console.log(`ACTION:SLACK_CTX_V1=${Buffer.from(serializedContext, "utf8").toString("base64url")}`);
   // CORS allow-origin is a constant `*` by design — touch corsAllowsOrigin
   // to keep the symbol referenced under noUnusedLocals.
   void corsAllowsOrigin();
@@ -1122,27 +1126,41 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
     const nowMs = Date.now();
     void store.touchCustomerTokenLastUsed(auth.caller.tokenHash, nowIso);
 
+    try {
+      const result = await libraryRoute(
+        method,
+        rawPath,
+        auth.caller.storeIds,
+        readRequestBody(fnEvent),
+        fnEvent.queryStringParameters,
+        store,
+        new TemplateLibrary(new DynamoTemplateLibraryTable(options.templateLibraryTableName)),
+      );
+      if (result) {
+        console.log("RequestId SUCCESS");
+        return jsonResponse(result.status, result.body);
+      }
+    } catch (error) {
+      if (error instanceof LibraryError) {
+        logHandledErrorAction(error.code, shouldSuppress(error.code));
+        if (shouldSuppress(error.code)) console.log("RequestId SUCCESS");
+        return jsonResponse(error.status, { error: error.code });
+      }
+      throw error;
+    }
+
     // POST is supported only on the commands subroute. Route POST traffic
     // before the GET-only routes so a POST elsewhere falls through to a 405.
     if (method === "POST") {
       const subroute = tryParseDeviceSubroutePath(rawPath);
       if (subroute !== null && subroute.kind === "commands") {
-        const authResult = await ensureAuthorizedDevice(
-          store,
-          auth.caller.storeIds,
-          subroute.deviceCode
-        );
+        const authResult = await ensureAuthorizedDevice(store, auth.caller.storeIds, subroute.deviceCode);
         if (authResult.kind === "fail") {
           logHandledErrorAction(authResult.errorCode, shouldSuppress(authResult.errorCode));
           return authResult.response;
         }
 
-        return await handleCreateCommand(
-          store,
-          authResult.record,
-          auth.caller.tokenHash,
-          readRequestBody(fnEvent)
-        );
+        return await handleCreateCommand(store, authResult.record, auth.caller.tokenHash, readRequestBody(fnEvent));
       }
 
       return textResponse(405, "Method not allowed");
@@ -1196,14 +1214,10 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
         throw err;
       }
 
-      const result = await store.queryPrintJobsByDevice(
-        subroute.deviceCode,
-        parsed.limit,
-        parsed.cursor as never
-      );
+      const result = await store.queryPrintJobsByDevice(subroute.deviceCode, parsed.limit, parsed.cursor as never);
       const payload: PrintJobsResponse = {
         items: result.items,
-        nextCursor: result.nextCursor !== undefined ? encodeCursor(result.nextCursor) : null
+        nextCursor: result.nextCursor !== undefined ? encodeCursor(result.nextCursor) : null,
       };
       console.log("RequestId SUCCESS");
       return jsonResponse(200, payload);
@@ -1211,11 +1225,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
 
     const commandDetail = tryParseCommandDetailPath(rawPath);
     if (commandDetail !== null) {
-      const authResult = await ensureAuthorizedDevice(
-        store,
-        auth.caller.storeIds,
-        commandDetail.deviceCode
-      );
+      const authResult = await ensureAuthorizedDevice(store, auth.caller.storeIds, commandDetail.deviceCode);
       if (authResult.kind === "fail") {
         logHandledErrorAction(authResult.errorCode, shouldSuppress(authResult.errorCode));
         return authResult.response;
@@ -1235,7 +1245,13 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
       const summary = toDeviceSummary(authResult.record, options, nowMs);
       const detail: DeviceDetail = {
         ...summary,
-        storeId: authResult.record.storeId.trim()
+        storeId: authResult.record.storeId.trim(),
+        groupId: authResult.record.storeId.trim(),
+        storeCode: authResult.record.storeCode,
+        installationId: authResult.record.installationId,
+        hostName: authResult.record.hostName,
+        printers: authResult.record.printers,
+        printersReportedAtUtc: authResult.record.printersReportedAtUtc,
       };
       console.log("RequestId SUCCESS");
       return jsonResponse(200, detail);
@@ -1255,8 +1271,8 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
         log_type: "unhandled_error",
         awsRequestId,
         message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined
-      })
+        stack: error instanceof Error ? error.stack : undefined,
+      }),
     );
     console.log("RequestId FAILED");
 
