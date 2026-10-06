@@ -2,6 +2,12 @@
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "GroupTemplateLibrary",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem"],
+      "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudTemplateLibrary"
+    },
+    {
       "Sid": "CreateOwnLogGroup",
       "Effect": "Allow",
       "Action": "logs:CreateLogGroup",

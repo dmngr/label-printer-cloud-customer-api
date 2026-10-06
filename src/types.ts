@@ -13,6 +13,11 @@ export interface CustomerTokenRecord {
 }
 
 export interface DeviceRecord {
+  storeCode: string;
+  installationId: string | null;
+  hostName: string | null;
+  printers: { name: string; isDefault: boolean }[] | null;
+  printersReportedAtUtc: string | null;
   deviceCode: string;
   storeId: string;
   deviceName: string;
@@ -34,6 +39,12 @@ export interface DeviceSummary {
 }
 
 export interface DeviceDetail extends DeviceSummary {
+  groupId: string;
+  storeCode: string;
+  installationId: string | null;
+  hostName: string | null;
+  printers: DeviceRecord["printers"];
+  printersReportedAtUtc: string | null;
   storeId: string;
 }
 
@@ -82,6 +93,12 @@ export interface CatalogProductsResponse {
  * rows surfaced to the customer-facing web app.
  */
 export interface CatalogTemplateItem {
+  layoutJson: string;
+  width: number;
+  height: number;
+  printerName: string;
+  isActive: boolean;
+  displayOrder: number;
   /** Device-local template id (LocalTemplateId), not the DynamoDB row key. */
   id: number;
   code: string;
@@ -132,6 +149,10 @@ export interface CatalogProductLookup {
 
 /** Same shape as `CatalogProductLookup`, projected from the templates table. */
 export interface CatalogTemplateLookup {
+  width: number;
+  height: number;
+  layoutJson: string;
+  isActive: boolean;
   /** Device-local template id used by local API commands. */
   id: number;
   code: string;
@@ -159,6 +180,7 @@ export interface CreateCommandRequestBody {
   productCode?: unknown;
   templateCode?: unknown;
   quantity?: unknown;
+  fields?: unknown;
   // upsert-product / upsert-template payloads
   product?: unknown;
   template?: unknown;

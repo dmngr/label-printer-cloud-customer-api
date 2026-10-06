@@ -8,6 +8,7 @@
 
 export interface CustomerApiOptions {
   devicesTableName: string;
+  templateLibraryTableName: string;
   customerTokensTableName: string;
   catalogProductsTableName: string;
   catalogTemplatesTableName: string;
@@ -56,40 +57,17 @@ function readValue(key: string, fallback: string): string {
 
 export function loadOptions(): CustomerApiOptions {
   return {
+    templateLibraryTableName: readValue("DM_LABEL_PRINTER_CLOUD_TEMPLATE_LIBRARY_TABLE", "DMLabelPrinterCloudTemplateLibrary"),
     devicesTableName: readValue("DM_LABEL_PRINTER_CLOUD_DEVICES_TABLE", DEFAULT_DEVICES_TABLE),
-    customerTokensTableName: readValue(
-      "DM_LABEL_PRINTER_CLOUD_CUSTOMER_TOKENS_TABLE",
-      DEFAULT_CUSTOMER_TOKENS_TABLE
-    ),
-    catalogProductsTableName: readValue(
-      "DM_LABEL_PRINTER_CLOUD_CATALOG_PRODUCTS_TABLE",
-      DEFAULT_CATALOG_PRODUCTS_TABLE
-    ),
-    catalogTemplatesTableName: readValue(
-      "DM_LABEL_PRINTER_CLOUD_CATALOG_TEMPLATES_TABLE",
-      DEFAULT_CATALOG_TEMPLATES_TABLE
-    ),
-    printJobsTableName: readValue(
-      "DM_LABEL_PRINTER_CLOUD_PRINT_JOBS_TABLE",
-      DEFAULT_PRINT_JOBS_TABLE
-    ),
-    deviceCommandsTableName: readValue(
-      "DM_LABEL_PRINTER_CLOUD_DEVICE_COMMANDS_TABLE",
-      DEFAULT_DEVICE_COMMANDS_TABLE
-    ),
-    countersTableName: readValue(
-      "DM_LABEL_PRINTER_CLOUD_COUNTERS_TABLE",
-      DEFAULT_COUNTERS_TABLE
-    ),
-    catalogDeviceCodeIndexName: readValue(
-      "DM_LABEL_PRINTER_CLOUD_CATALOG_DEVICE_CODE_INDEX",
-      DEFAULT_CATALOG_DEVICE_CODE_INDEX
-    ),
-    printJobsDeviceCreatedIndexName: readValue(
-      "DM_LABEL_PRINTER_CLOUD_PRINT_JOBS_DEVICE_CREATED_INDEX",
-      DEFAULT_PRINT_JOBS_DEVICE_CREATED_INDEX
-    ),
+    customerTokensTableName: readValue("DM_LABEL_PRINTER_CLOUD_CUSTOMER_TOKENS_TABLE", DEFAULT_CUSTOMER_TOKENS_TABLE),
+    catalogProductsTableName: readValue("DM_LABEL_PRINTER_CLOUD_CATALOG_PRODUCTS_TABLE", DEFAULT_CATALOG_PRODUCTS_TABLE),
+    catalogTemplatesTableName: readValue("DM_LABEL_PRINTER_CLOUD_CATALOG_TEMPLATES_TABLE", DEFAULT_CATALOG_TEMPLATES_TABLE),
+    printJobsTableName: readValue("DM_LABEL_PRINTER_CLOUD_PRINT_JOBS_TABLE", DEFAULT_PRINT_JOBS_TABLE),
+    deviceCommandsTableName: readValue("DM_LABEL_PRINTER_CLOUD_DEVICE_COMMANDS_TABLE", DEFAULT_DEVICE_COMMANDS_TABLE),
+    countersTableName: readValue("DM_LABEL_PRINTER_CLOUD_COUNTERS_TABLE", DEFAULT_COUNTERS_TABLE),
+    catalogDeviceCodeIndexName: readValue("DM_LABEL_PRINTER_CLOUD_CATALOG_DEVICE_CODE_INDEX", DEFAULT_CATALOG_DEVICE_CODE_INDEX),
+    printJobsDeviceCreatedIndexName: readValue("DM_LABEL_PRINTER_CLOUD_PRINT_JOBS_DEVICE_CREATED_INDEX", DEFAULT_PRINT_JOBS_DEVICE_CREATED_INDEX),
     onlineWindowMinutes: DEFAULT_ONLINE_WINDOW_MINUTES,
-    activeWindowMinutes: DEFAULT_ACTIVE_WINDOW_MINUTES
+    activeWindowMinutes: DEFAULT_ACTIVE_WINDOW_MINUTES,
   };
 }

@@ -67,6 +67,74 @@
     "customer_api_command_not_found": {
       "emit_requestid_success": false,
       "notes": "GET /commands/{id} row is missing or belongs to a different DeviceCode (HTTP 404)."
+    },
+    "customer_api_agent_update_required": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "customer_api_command_invalid_inputs": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_invalid_path": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_forbidden_group": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_invalid_body": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_invalid_inputs": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_target_not_found": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_route_not_found": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_invalid_id": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_invalid_revision": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_invalid_template": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_invalid_layout": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_invalid_assignment": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_invalid_printer": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_invalid_target": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_template_not_found": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_revision_conflict": {
+      "emit_requestid_success": true,
+      "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
     }
   }
 }
