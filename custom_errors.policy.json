@@ -135,6 +135,14 @@
     "library_revision_conflict": {
       "emit_requestid_success": true,
       "notes": "Expected customer validation, authorization or revision conflict; reported to the caller without changing stored data."
+    },
+    "library_invalid_archive": {
+      "emit_requestid_success": true,
+      "notes": "Archive request requires a boolean state and valid expected revisions."
+    },
+    "library_template_archived": {
+      "emit_requestid_success": true,
+      "notes": "Restore the archived template before editing or adding a new assignment reference."
     }
   }
 }

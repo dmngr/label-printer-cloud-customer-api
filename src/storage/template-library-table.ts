@@ -3,7 +3,7 @@
  * and expected revisions reject concurrent edits rather than losing changes.
  * The managed Node runtime supplies the AWS SDK; no SDK dependency is bundled.
  */
-import { LibraryError, type LibraryRow, type LibraryTable } from "../lib/template-library";
+import { LibraryError, type LibraryRow, type LibraryTable, type LibraryGuard } from "../lib/template-library";
 type Item = Record<string, { S?: string; N?: string }>;
 interface Output {
   Item?: Item;
@@ -56,7 +56,7 @@ export class DynamoTemplateLibraryTable implements LibraryTable {
     } while (cursor && Object.keys(cursor).length);
     return rows;
   }
-  async write(group: string, value: LibraryRow, expectedVersion: number, immutable?: LibraryRow): Promise<void> {
+  async write(group: string, value: LibraryRow, expectedVersion: number, immutable?: LibraryRow, guards: LibraryGuard[] = []): Promise<void> {
     const { sdk, client } = runtime();
     const put = (record: LibraryRow, expected: number): object => ({
       Put: {
@@ -75,17 +75,39 @@ export class DynamoTemplateLibraryTable implements LibraryTable {
     });
     try {
       await client.send(
-        new sdk.TransactWriteItemsCommand({ TransactItems: [put(value, expectedVersion), ...(immutable ? [put(immutable, 0)] : [])] }),
+        new sdk.TransactWriteItemsCommand({
+          TransactItems: [
+            put(value, expectedVersion),
+            ...(immutable ? [put(immutable, 0)] : []),
+            ...guards.map(guard => ({
+              ConditionCheck: {
+                TableName: this.tableName,
+                Key: { GroupId: { S: group }, ItemKey: { S: guard.key } },
+                ConditionExpression: guard.version === 0 ? "attribute_not_exists(ItemKey)" : "#version = :expected",
+                ...(guard.version === 0
+                  ? {}
+                  : {
+                      ExpressionAttributeNames: { "#version": "Version" },
+                      ExpressionAttributeValues: { ":expected": { N: String(guard.version) } },
+                    }),
+              },
+            })),
+          ],
+        }),
       );
     } catch (error) {
       const failure = error as { name?: string; CancellationReasons?: { Code?: string }[] };
       if (failure.name === "TransactionCanceledException" && failure.CancellationReasons?.some(reason => reason.Code === "ConditionalCheckFailed"))
         throw new LibraryError(409, "library_revision_conflict");
       // Some SDK/runtime combinations omit per-item cancellation reasons.
-      // Strongly read the head to distinguish a stale edit from a real outage.
+      // Strongly read every conditioned revision to distinguish a stale edit or
+      // archive race from a real outage; matching revisions do not prove success.
       if (failure.name === "TransactionCanceledException" && !failure.CancellationReasons) {
         const current = await this.get(group, value.key);
         if ((current?.version ?? 0) !== expectedVersion) throw new LibraryError(409, "library_revision_conflict");
+        for (const guard of guards) {
+          if (((await this.get(group, guard.key))?.version ?? 0) !== guard.version) throw new LibraryError(409, "library_revision_conflict");
+        }
       }
       throw error;
     }

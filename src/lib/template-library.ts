@@ -5,6 +5,9 @@
  * and assignments pin them. Installation overrides replace a store selection;
  * inherit=true restores it, while an explicit empty selection disables all.
  * Reads fail loudly: a failed lookup must never become an empty assignment.
+ * S# archive state has an independent revision. It never changes T#/V# content
+ * or pinned assignments. New selections and edits condition this state in the
+ * same transaction, so an archive cannot race a validation-only read.
  */
 import { createHash } from "node:crypto";
 
@@ -27,7 +30,11 @@ export interface LibraryTemplate extends TemplateDefinition {
   version: number;
   updatedAtUtc: string;
 }
-export type TemplateHead = Omit<LibraryTemplate, "layoutJson">;
+export interface ArchiveState {
+  archived: boolean;
+  archiveRevision: number;
+}
+export type TemplateHead = Omit<LibraryTemplate, "layoutJson"> & Partial<ArchiveState>;
 export interface AssignmentEntry {
   templateId: string;
   version: number;
@@ -53,7 +60,11 @@ export interface LibraryRow {
 export interface LibraryTable {
   get(group: string, key: string): Promise<LibraryRow | null>;
   list(group: string, prefix: string): Promise<LibraryRow[]>;
-  write(group: string, row: LibraryRow, expectedVersion: number, immutable?: LibraryRow): Promise<void>;
+  write(group: string, row: LibraryRow, expectedVersion: number, immutable?: LibraryRow, guards?: LibraryGuard[]): Promise<void>;
+}
+export interface LibraryGuard {
+  key: string;
+  version: number;
 }
 export const MAX_ASSIGNMENTS = 32;
 export function libraryId(value: string): string {
@@ -130,14 +141,47 @@ export function assignmentKey(kind: "store" | "installation", target: string): s
   return `A#${kind}#${Buffer.from(target).toString("base64url")}`;
 }
 const versionKey = (id: string, version: number): string => `V#${libraryId(id)}#${String(version).padStart(10, "0")}`;
+const archiveKey = (id: string): string => `S#${id}`;
+function archiveState(row: LibraryRow | null): ArchiveState {
+  if (!row) return { archived: false, archiveRevision: 0 };
+  const payload = row.payload as { archived?: unknown } | null;
+  if (!payload || typeof payload.archived !== "boolean" || !Number.isSafeInteger(row.version) || row.version < 1)
+    throw new Error("Invalid stored archive state");
+  return { archived: payload.archived, archiveRevision: row.version };
+}
 
 export class TemplateLibrary {
   constructor(private readonly table: LibraryTable) {}
 
-  async list(group: string): Promise<TemplateHead[]> {
-    return (await this.table.list(group, "T#"))
-      .map(row => row.payload as TemplateHead)
+  async list(group: string, includeArchived = false): Promise<TemplateHead[]> {
+    const [heads, states] = await Promise.all([this.table.list(group, "T#"), this.table.list(group, "S#")]);
+    const archive = new Map(states.map(row => [row.key, archiveState(row)]));
+    return heads
+      .map(row => ({ ...(row.payload as TemplateHead), ...(archive.get(archiveKey(row.key.slice(2))) ?? archiveState(null)) }))
+      .filter(head => includeArchived || !head.archived)
       .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  }
+
+  async setArchived(group: string, id: string, expectedVersion: number, expectedArchiveRevision: number, archived: boolean): Promise<TemplateHead> {
+    id = libraryId(id);
+    revision(expectedVersion);
+    revision(expectedArchiveRevision);
+    if (typeof archived !== "boolean") throw new LibraryError(400, "library_invalid_archive");
+    const head = await this.table.get(group, `T#${id}`);
+    if (!head) throw new LibraryError(404, "library_template_not_found");
+    const state = archiveState(await this.table.get(group, archiveKey(id)));
+    if (head.version !== expectedVersion || state.archiveRevision !== expectedArchiveRevision)
+      throw new LibraryError(409, "library_revision_conflict");
+    if (state.archived === archived) return { ...(head.payload as TemplateHead), ...state };
+    const next = { archived, archiveRevision: expectedArchiveRevision + 1 };
+    await this.table.write(
+      group,
+      { key: archiveKey(id), version: next.archiveRevision, payload: { archived, updatedAtUtc: new Date().toISOString() } },
+      expectedArchiveRevision,
+      undefined,
+      [{ key: head.key, version: expectedVersion }],
+    );
+    return { ...(head.payload as TemplateHead), ...next };
   }
 
   async get(group: string, id: string, version?: number): Promise<LibraryTemplate> {
@@ -153,17 +197,25 @@ export class TemplateLibrary {
     return row.payload as LibraryTemplate;
   }
 
-  async save(group: string, id: string, expectedVersion: number, input: TemplateDefinition): Promise<LibraryTemplate> {
+  async save(group: string, id: string, expectedVersion: number, input: TemplateDefinition): Promise<LibraryTemplate & ArchiveState> {
     id = libraryId(id);
     const version = revision(expectedVersion) + 1;
     const template: LibraryTemplate = { ...definition(input), id, version, updatedAtUtc: new Date().toISOString() };
     const { layoutJson: _layout, ...head } = template;
-    await this.table.write(group, { key: `T#${id}`, version, payload: head }, expectedVersion, {
-      key: versionKey(id, version),
-      version,
-      payload: template,
-    });
-    return template;
+    const state = archiveState(await this.table.get(group, archiveKey(id)));
+    if (state.archived) throw new LibraryError(409, "library_template_archived");
+    await this.table.write(
+      group,
+      { key: `T#${id}`, version, payload: head },
+      expectedVersion,
+      {
+        key: versionKey(id, version),
+        version,
+        payload: template,
+      },
+      [{ key: archiveKey(id), version: state.archiveRevision }],
+    );
+    return { ...template, ...state };
   }
 
   async getAssignment(group: string, kind: "store" | "installation", target: string): Promise<TemplateAssignment> {
@@ -174,11 +226,29 @@ export class TemplateLibrary {
   async saveAssignment(group: string, kind: "store" | "installation", target: string, value: unknown): Promise<TemplateAssignment> {
     const parsed = assignment(value);
     if (kind === "store" && parsed.inherit) throw new LibraryError(400, "library_invalid_assignment");
+    const current = await this.getAssignment(group, kind, target);
+    if (current.revision !== parsed.expectedRevision) throw new LibraryError(409, "library_revision_conflict");
     // Resolve every reference before the one conditional write: another group's
     // id or a missing version cannot become an unusable persisted selection.
     await Promise.all(parsed.entries.map(entry => this.get(group, entry.templateId, entry.version)));
+    const guards: LibraryGuard[] = [];
+    for (const entry of parsed.entries) {
+      // Exact existing references remain usable after archive, including printer
+      // changes. Changing the version or adding a reference requires active state.
+      if (current.entries.some(old => old.templateId === entry.templateId && old.version === entry.version)) continue;
+      const key = archiveKey(entry.templateId);
+      const state = archiveState(await this.table.get(group, key));
+      if (state.archived) throw new LibraryError(409, "library_template_archived");
+      guards.push({ key, version: state.archiveRevision });
+    }
     const result = { revision: parsed.expectedRevision + 1, inherit: parsed.inherit, entries: parsed.entries };
-    await this.table.write(group, { key: assignmentKey(kind, target), version: result.revision, payload: result }, parsed.expectedRevision);
+    await this.table.write(
+      group,
+      { key: assignmentKey(kind, target), version: result.revision, payload: result },
+      parsed.expectedRevision,
+      undefined,
+      guards,
+    );
     return result;
   }
 

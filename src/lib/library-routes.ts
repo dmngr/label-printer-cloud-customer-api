@@ -65,7 +65,15 @@ export async function libraryRoute(
     return parsed;
   };
   if (parts[1] === "templates") {
-    if (parts.length === 2 && method === "GET") return { status: 200, body: { items: await library.list(group) } };
+    if (parts.length === 2 && method === "GET") return { status: 200, body: { items: await library.list(group, query?.includeArchived === "true") } };
+    if (parts.length === 4 && parts[3] === "archive" && method === "POST") {
+      const input = body();
+      if (typeof input.archived !== "boolean") throw new LibraryError(400, "library_invalid_archive");
+      return {
+        status: 200,
+        body: await library.setArchived(group, parts[2], revision(input.expectedVersion), revision(input.expectedArchiveRevision), input.archived),
+      };
+    }
     if (parts.length === 3 && method === "GET")
       return { status: 200, body: await library.get(group, parts[2], query?.version === undefined ? undefined : Number(query.version)) };
     if (parts.length === 3 && method === "POST") {
