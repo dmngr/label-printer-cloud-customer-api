@@ -8,6 +8,17 @@
       "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudTemplateLibrary"
     },
     {
+      "Sid": "ConditionGroupTemplateState",
+      "Effect": "Allow",
+      "Action": "dynamodb:ConditionCheckItem",
+      "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudTemplateLibrary",
+      "Condition": {
+        "ForAnyValue:StringEquals": {
+          "dynamodb:EnclosingOperation": ["TransactWriteItems"]
+        }
+      }
+    },
+    {
       "Sid": "CreateOwnLogGroup",
       "Effect": "Allow",
       "Action": "logs:CreateLogGroup",
@@ -16,28 +27,19 @@
     {
       "Sid": "WriteOwnLogs",
       "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ],
+      "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
       "Resource": "arn:aws:logs:eu-west-1:787324535455:log-group:/aws/lambda/label-printer-cloud-customer-api:*"
     },
     {
       "Sid": "ReadAndTouchCustomerTokens",
       "Effect": "Allow",
-      "Action": [
-        "dynamodb:GetItem",
-        "dynamodb:UpdateItem"
-      ],
+      "Action": ["dynamodb:GetItem", "dynamodb:UpdateItem"],
       "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudCustomerTokens"
     },
     {
       "Sid": "ReadDevices",
       "Effect": "Allow",
-      "Action": [
-        "dynamodb:GetItem",
-        "dynamodb:Scan"
-      ],
+      "Action": ["dynamodb:GetItem", "dynamodb:Scan"],
       "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudDevices"
     },
     {
@@ -69,10 +71,7 @@
     {
       "Sid": "CreateAndReadCommands",
       "Effect": "Allow",
-      "Action": [
-        "dynamodb:GetItem",
-        "dynamodb:PutItem"
-      ],
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem"],
       "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudDeviceCommands"
     }
   ]

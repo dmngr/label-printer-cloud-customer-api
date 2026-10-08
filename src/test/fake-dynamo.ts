@@ -35,9 +35,11 @@ export class FakeDynamo {
     const tableName = String(input.TableName ?? "");
     if (tableName === this.failTable && this.failTable) throw new Error("mock database unavailable");
     if (command.kind === "TransactWriteItemsCommand") {
-      const entries = (input.TransactItems as { Put: Record<string, unknown> }[]).map(entry => entry.Put);
-      for (const put of entries) {
-        const current = this.table(String(put.TableName)).get(keyOf(put.Item as Item));
+      const entries = input.TransactItems as { Put?: Record<string, unknown>; ConditionCheck?: Record<string, unknown> }[];
+      for (const entry of entries) {
+        const put = (entry.Put ?? entry.ConditionCheck)!;
+        if (put.TableName === this.failTable) throw new Error("mock database unavailable");
+        const current = this.table(String(put.TableName)).get(keyOf((put.Item ?? put.Key) as Item));
         const expected = (put.ExpressionAttributeValues as Item | undefined)?.[":expected"]?.N;
         if (expected === undefined ? !!current : current?.Version.N !== expected) {
           throw Object.assign(new Error("stale revision"), {
@@ -46,7 +48,9 @@ export class FakeDynamo {
           });
         }
       }
-      entries.forEach(put => this.seed(String(put.TableName), put.Item as Item));
+      entries.forEach(({ Put: put }) => {
+        if (put) this.seed(String(put.TableName), put.Item as Item);
+      });
       return {};
     }
     const table = this.table(tableName);

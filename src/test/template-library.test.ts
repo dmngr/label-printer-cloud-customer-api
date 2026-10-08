@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LibraryError, TemplateLibrary, type LibraryRow, type LibraryTable } from "../lib/template-library";
+import { LibraryError, TemplateLibrary, type LibraryRow, type LibraryTable, type LibraryGuard } from "../lib/template-library";
 import { libraryRoute } from "../lib/library-routes";
 import type { DeviceRecord } from "../types";
 
@@ -15,7 +15,10 @@ class MemoryTable implements LibraryTable {
     this.calls.push(group);
     return [...this.rows.entries()].filter(([key]) => key.startsWith(group + "/" + prefix)).map(([, row]) => structuredClone(row));
   }
-  async write(group: string, row: LibraryRow, expected: number, immutable?: LibraryRow): Promise<void> {
+  async write(group: string, row: LibraryRow, expected: number, immutable?: LibraryRow, guards: LibraryGuard[] = []): Promise<void> {
+    for (const guard of guards) {
+      if ((this.rows.get(group + "/" + guard.key)?.version ?? 0) !== guard.version) throw new LibraryError(409, "library_revision_conflict");
+    }
     const key = group + "/" + row.key;
     if ((this.rows.get(key)?.version ?? 0) !== expected || (immutable && this.rows.has(group + "/" + immutable.key)))
       throw new LibraryError(409, "library_revision_conflict");

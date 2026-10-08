@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LibraryError, TemplateLibrary, type LibraryRow, type LibraryTable } from "../lib/template-library";
+import { LibraryError, TemplateLibrary, type LibraryRow, type LibraryTable, type LibraryGuard } from "../lib/template-library";
 import { LibraryApplications, parseApplicationReport, applicationKey, type ApplicationReport } from "../lib/library-application";
 import { libraryRoute } from "../lib/library-routes";
 import type { DeviceRecord } from "../types";
@@ -17,10 +17,13 @@ class MemoryTable implements LibraryTable {
   async list() {
     return [];
   }
-  async write(group: string, row: LibraryRow, expected: number, immutable?: LibraryRow) {
+  async write(group: string, row: LibraryRow, expected: number, immutable?: LibraryRow, guards: LibraryGuard[] = []) {
     if (this.conflict) {
       this.conflict = false;
       throw new LibraryError(409, "library_revision_conflict");
+    }
+    for (const guard of guards) {
+      if ((this.rows.get(group + "/" + guard.key)?.version ?? 0) !== guard.version) throw new LibraryError(409, "library_revision_conflict");
     }
     const key = group + "/" + row.key;
     if ((this.rows.get(key)?.version ?? 0) !== expected) throw new LibraryError(409, "library_revision_conflict");

@@ -18,6 +18,10 @@
  *   GET  /api/v1/me/devices/{deviceCode}/commands/{id}      -> command status detail
  *   GET  /api/v1/me/groups                                -> actual store/install hierarchy
  *   GET/POST /api/v1/me/groups/{group}/templates/{id}      -> immutable versions
+ *   GET /api/v1/me/groups/{group}/templates?includeArchived=true -> all library states
+ *   POST /api/v1/me/groups/{group}/templates/{id}/archive -> reversible archive/restore
+ * Archive never deletes versions or changes existing assignments. New references
+ * and edits require active state, checked atomically with their revision writes.
  *   GET/POST /api/v1/me/groups/{group}/{stores|installations}/{target}/assignment
  *   GET /api/v1/me/groups/{group}/{stores|installations}/{target}/applications
  *   POST /api/v1/me/groups/{group}/installations/{target}/applications/retry
