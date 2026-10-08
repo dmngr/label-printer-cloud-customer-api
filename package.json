@@ -1,6 +1,6 @@
 {
   "name": "label-printer-cloud-customer-api",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Authenticated customer catalog, print commands and versioned group template library for app.label.ninja.",
   "main": "dist/handlers/customer-api.js",
   "engines": {
