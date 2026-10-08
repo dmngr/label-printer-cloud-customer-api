@@ -6,6 +6,7 @@
 import { definition, LibraryError, object, revision, TemplateLibrary } from "./template-library";
 import { readTemplateInputs } from "./template-inputs";
 import type { DeviceRecord } from "../types";
+import type { LibraryApplications } from "./library-application";
 export interface LibraryRouteStore {
   scanDevicesByStoreIds(groups: ReadonlyArray<string>): Promise<DeviceRecord[]>;
   getDevice(deviceCode: string): Promise<DeviceRecord | null>;
@@ -18,6 +19,7 @@ export async function libraryRoute(
   query: Record<string, string | undefined> | undefined,
   store: LibraryRouteStore,
   library: TemplateLibrary,
+  applications?: LibraryApplications,
 ): Promise<{ status: number; body: unknown } | null> {
   if (path === "/api/v1/me/groups" && method === "GET") {
     const records = await store.scanDevicesByStoreIds(groups);
@@ -90,6 +92,27 @@ export async function libraryRoute(
     }
     if (method === "GET") return { status: 200, body: await library.getAssignment(group, kind, target) };
     if (method === "POST") return { status: 200, body: await library.saveAssignment(group, kind, target, body()) };
+  }
+  if ((parts[1] === "stores" || parts[1] === "installations") && parts.length === 4 && parts[3] === "applications" && method === "GET") {
+    const target = parts[2];
+    const devices =
+      parts[1] === "installations"
+        ? [await store.getDevice(target)].filter((device): device is DeviceRecord => device !== null && device.storeId === group)
+        : (await store.scanDevicesByStoreIds([group])).filter(device => device.storeId === group && device.storeCode === target);
+    if (!target || !devices.length) throw new LibraryError(404, "library_target_not_found");
+    if (!applications) throw new Error("Library application service is not configured");
+    const items = [];
+    // Bound backend concurrency even for stores with many installations.
+    for (const device of devices) items.push(await applications.status(group, device.storeCode, device));
+    return { status: 200, body: { items } };
+  }
+  if (parts[1] === "installations" && parts.length === 5 && parts[3] === "applications" && parts[4] === "retry" && method === "POST") {
+    const device = await store.getDevice(parts[2]);
+    if (!device || device.storeId !== group) throw new LibraryError(404, "library_target_not_found");
+    const input = body();
+    if (!applications) throw new Error("Library application service is not configured");
+    const assignment = await applications.retry(group, device.storeCode, device.deviceCode, input.expectedSelectionId);
+    return { status: 202, body: { accepted: true, assignmentRevision: assignment.revision, previousAssignmentRevision: assignment.revision - 1 } };
   }
   throw new LibraryError(404, "library_route_not_found");
 }

@@ -42,6 +42,7 @@ export interface ResolvedLibrary {
   group: string;
   source: "installation" | "store";
   revision: number;
+  selectionId?: string;
   templates: (LibraryTemplate & { printerName?: string })[];
 }
 export interface LibraryRow {
@@ -196,6 +197,12 @@ export class TemplateLibrary {
         ...(entry.printerName ? { printerName: entry.printerName } : {}),
       })),
     );
-    return { group, source: useStore ? "store" : "installation", revision: selected.revision, templates };
+    const source = useStore ? "store" : "installation";
+    // Include the installation revision even when it inherits. Returning to a
+    // previous choice (or explicitly retrying) must not reuse its old receipt.
+    const selectionId = createHash("sha256")
+      .update(JSON.stringify([group, storeCode, deviceCode, override.revision, source, selected.revision, selected.entries]))
+      .digest("hex");
+    return { group, source, revision: selected.revision, selectionId, templates };
   }
 }

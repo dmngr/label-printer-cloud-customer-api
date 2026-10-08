@@ -19,6 +19,8 @@
  *   GET  /api/v1/me/groups                                -> actual store/install hierarchy
  *   GET/POST /api/v1/me/groups/{group}/templates/{id}      -> immutable versions
  *   GET/POST /api/v1/me/groups/{group}/{stores|installations}/{target}/assignment
+ *   GET /api/v1/me/groups/{group}/{stores|installations}/{target}/applications
+ *   POST /api/v1/me/groups/{group}/installations/{target}/applications/retry
  *
  * Template library storage is DM_LABEL_PRINTER_CLOUD_TEMPLATE_LIBRARY_TABLE.
  * Every group path is authorized against the existing token's StoreIds grants,
@@ -52,6 +54,7 @@ import { extractBearer, sha256Hex } from "../lib/bearer-authorizer";
 import { jsonResponse, noContentResponse, textResponse, type LambdaResponse } from "../lib/http-results";
 import { CustomError, logHandledErrorAction, redactDeep, shouldSuppress } from "../lib/handled-errors";
 import { libraryRoute } from "../lib/library-routes";
+import { LibraryApplications } from "../lib/library-application";
 import { LibraryError, TemplateLibrary } from "../lib/template-library";
 import { bindTemplateInputs, readTemplateInputs } from "../lib/template-inputs";
 import { DynamoTemplateLibraryTable } from "../storage/template-library-table";
@@ -1127,6 +1130,8 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
     void store.touchCustomerTokenLastUsed(auth.caller.tokenHash, nowIso);
 
     try {
+      const libraryTable = new DynamoTemplateLibraryTable(options.templateLibraryTableName);
+      const library = new TemplateLibrary(libraryTable);
       const result = await libraryRoute(
         method,
         rawPath,
@@ -1134,7 +1139,8 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
         readRequestBody(fnEvent),
         fnEvent.queryStringParameters,
         store,
-        new TemplateLibrary(new DynamoTemplateLibraryTable(options.templateLibraryTableName)),
+        library,
+        new LibraryApplications(libraryTable, library),
       );
       if (result) {
         console.log("RequestId SUCCESS");
