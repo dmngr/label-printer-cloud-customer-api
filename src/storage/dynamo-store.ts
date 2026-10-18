@@ -330,7 +330,7 @@ export class DynamoCustomerApiStore {
         // the projection ensures we get a non-empty Item back even if the
         // row exists but has no Group / no metadata yet.
         ProjectionExpression:
-          "DeviceCode, #g, StoreCode, InstallationId, HostName, PrintersJson, PrintersReportedAtUtc, DeviceName, AppVersion, LastSeenAtUtc, PendingCommands, FailedJobs",
+          "DeviceCode, #g, StoreCode, InstallationId, HostName, PrintersJson, PrintersReportedAtUtc, DeviceName, AppVersion, PrintRequestProtocolVersion, LastSeenAtUtc, PendingCommands, FailedJobs",
         ExpressionAttributeNames: { "#g": "Group" },
       }),
     );
@@ -351,6 +351,7 @@ export class DynamoCustomerApiStore {
       printersReportedAtUtc: readNullableString(item, "PrintersReportedAtUtc"),
       deviceName: readString(item, "DeviceName"),
       appVersion: readString(item, "AppVersion"),
+      printRequestProtocolVersion: Number(readString(item, "PrintRequestProtocolVersion") || "0"),
       lastSeenAtUtc: readString(item, "LastSeenAtUtc"),
       pendingCommands: readNumber(item, "PendingCommands"),
       failedJobs: readNumber(item, "FailedJobs"),

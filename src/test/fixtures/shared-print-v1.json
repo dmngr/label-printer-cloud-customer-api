@@ -1,0 +1,21 @@
+{
+  "width": 58,
+  "height": 40,
+  "layoutJson": "{\"inputs\":[{\"key\":\"header\",\"required\":true}],\"elements\":[{\"type\":\"text\",\"field\":\"header\",\"width\":54,\"height\":8}]}",
+  "templateFingerprint": "sha256:60f6b69652fdfacb36a7b2b7517ee4a0f57aacbf1a899162917f8ca69d6462f7",
+  "request": {
+    "protocolVersion": 1,
+    "printRequestId": "fixture-v1-001",
+    "deviceCode": "device-a",
+    "templateCode": "straße-a",
+    "templateFingerprint": "sha256:60f6b69652fdfacb36a7b2b7517ee4a0f57aacbf1a899162917f8ca69d6462f7",
+    "printerName": "Printer A",
+    "quantity": 1,
+    "fields": {
+      "HEADER": "Τίτλος",
+      "recordedTime": "14:32"
+    },
+    "expiresAtUtc": "2030-10-18T10:00:00Z"
+  },
+  "normalizedTemplateCode": "STRAßE-A"
+}

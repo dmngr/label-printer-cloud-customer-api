@@ -143,6 +143,26 @@
     "library_template_archived": {
       "emit_requestid_success": true,
       "notes": "Restore the archived template before editing or adding a new assignment reference."
+    },
+    "print_request_invalid": {
+      "emit_requestid_success": true,
+      "notes": "Expected shared-print protocol validation/conflict; no new command was accepted."
+    },
+    "print_request_conflict": {
+      "emit_requestid_success": true,
+      "notes": "Expected shared-print protocol validation/conflict; no new command was accepted."
+    },
+    "print_request_destination_conflict": {
+      "emit_requestid_success": true,
+      "notes": "Expected shared-print protocol validation/conflict; no new command was accepted."
+    },
+    "print_request_agent_update_required": {
+      "emit_requestid_success": true,
+      "notes": "Expected shared-print protocol validation/conflict; no new command was accepted."
+    },
+    "print_request_expired": {
+      "emit_requestid_success": true,
+      "notes": "Expected shared-print protocol validation/conflict; no new command was accepted."
     }
   }
 }

@@ -13,6 +13,7 @@ export interface CustomerTokenRecord {
 }
 
 export interface DeviceRecord {
+  printRequestProtocolVersion?: number;
   storeCode: string;
   installationId: string | null;
   hostName: string | null;
@@ -28,6 +29,7 @@ export interface DeviceRecord {
 }
 
 export interface DeviceSummary {
+  printRequestProtocolVersion: number;
   deviceCode: string;
   deviceName: string;
   appVersion: string;
