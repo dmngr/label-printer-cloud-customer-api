@@ -11,7 +11,7 @@ export type LambdaResponse = APIGatewayProxyStructuredResultV2;
 
 const CORS_HEADERS: Readonly<Record<string, string>> = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "Authorization,Content-Type",
+  "Access-Control-Allow-Headers": "Authorization,Content-Type,Idempotency-Key",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS"
 };
 

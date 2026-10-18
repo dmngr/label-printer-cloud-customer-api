@@ -69,6 +69,13 @@
       "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudCounters"
     },
     {
+      "Sid": "SharedPrintAcceptanceReceipts",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem"],
+      "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudCounters",
+      "Condition": { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["PrintRequestV1:*"] } }
+    },
+    {
       "Sid": "CreateAndReadCommands",
       "Effect": "Allow",
       "Action": ["dynamodb:GetItem", "dynamodb:PutItem"],

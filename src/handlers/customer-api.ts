@@ -15,6 +15,16 @@
  * the lifecycle from claim onwards):
  *
  *   POST /api/v1/me/devices/{deviceCode}/commands           -> queue print-label command
+ *     Shared protocol: {commandType:"print-request", printRequest:<protocol 1 intent>}.
+ *     The nested object is identical to local POST /api/v1/print/requests.
+ *     printRequestId is caller-owned and reused across both transports/retries;
+ *     changed content under the same group-scoped ID is a 409. Destination is
+ *     fixed. Receipt and command commit atomically; receipt survives cleanup.
+ *     GET devices advertises printRequestProtocolVersion; GET templates exposes
+ *     exact templateFingerprint + inputs. The installed target must advertise 1.
+ *     Cloud Completed means local durable acceptance, not physical output.
+ *     Device status/history remains the authority for spool outcome. Legacy
+ *     print-label does not participate in cross-transport deduplication.
  *   GET  /api/v1/me/devices/{deviceCode}/commands/{id}      -> command status detail
  *   GET  /api/v1/me/groups                                -> actual store/install hierarchy
  *   GET/POST /api/v1/me/groups/{group}/templates/{id}      -> immutable versions
@@ -54,6 +64,8 @@ if (typeof BigInt === "function" && !BigInt.prototype.toJSON) {
 import type { APIGatewayProxyHandlerV2, LambdaFunctionURLEvent } from "aws-lambda";
 
 import { loadOptions, type CustomerApiOptions } from "../config";
+import { PrintRequestStore } from "../storage/print-request-store";
+import { parseSharedPrintRequest, PrintRequestError, templateFingerprint } from "../lib/shared-print-request";
 import { extractBearer, sha256Hex } from "../lib/bearer-authorizer";
 import { jsonResponse, noContentResponse, textResponse, type LambdaResponse } from "../lib/http-results";
 import { CustomError, logHandledErrorAction, redactDeep, shouldSuppress } from "../lib/handled-errors";
@@ -293,6 +305,7 @@ function toDeviceSummary(record: DeviceRecord, options: CustomerApiOptions, nowM
   const deviceName = record.deviceName.trim().length > 0 ? record.deviceName : record.deviceCode;
   return {
     deviceCode: record.deviceCode,
+    printRequestProtocolVersion: record.printRequestProtocolVersion ?? 0,
     deviceName,
     appVersion: record.appVersion,
     lastSeenAtUtc: record.lastSeenAtUtc,
@@ -962,8 +975,28 @@ async function handleCreateCommand(
   device: DeviceRecord,
   callerTokenHash: string,
   rawBody: string | undefined,
+  requestKey?: string,
 ): Promise<LambdaResponse> {
   let parsedBody: ParsedCreateCommandBody;
+  // Shared protocol is explicit: legacy product commands keep their payload
+  // and receipts. The new command carries the exact local /print/requests body.
+  let candidate: Record<string, unknown> | undefined;
+  try { candidate = JSON.parse(rawBody ?? "") as Record<string, unknown>; } catch { /* existing parser reports malformed JSON */ }
+  if (candidate?.commandType === "print-request") {
+    try {
+      if (Object.keys(candidate).some(key => key !== "commandType" && key !== "printRequest"))
+        throw new PrintRequestError(400, "print_request_invalid");
+      const request = parseSharedPrintRequest(candidate.printRequest);
+      if (requestKey !== undefined && requestKey !== request.printRequestId) throw new PrintRequestError(400, "print_request_invalid");
+      const result = await new PrintRequestStore(loadOptions()).submit(device, request,
+        () => store.getNextDeviceCommandId(), `customer-api:${callerTokenHash.slice(0, REQUESTED_BY_TOKEN_HASH_PREFIX_LENGTH)}`);
+      console.log("RequestId SUCCESS");
+      return jsonResponse(201, result);
+    } catch (error) {
+      if (error instanceof PrintRequestError) return commandValidationFailure(error.code, error.status);
+      throw error;
+    }
+  }
   try {
     parsedBody = parseCreateCommandBody(rawBody);
   } catch (err) {
@@ -1170,7 +1203,8 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
           return authResult.response;
         }
 
-        return await handleCreateCommand(store, authResult.record, auth.caller.tokenHash, readRequestBody(fnEvent));
+        const requestKey = Object.entries(fnEvent.headers).find(([key]) => key.toLowerCase() === "idempotency-key")?.[1];
+        return await handleCreateCommand(store, authResult.record, auth.caller.tokenHash, readRequestBody(fnEvent), requestKey);
       }
 
       return textResponse(405, "Method not allowed");
@@ -1207,7 +1241,9 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
 
       if (subroute.kind === "templates") {
         const items = await store.queryTemplatesByDeviceCode(subroute.deviceCode);
-        const payload: CatalogTemplatesResponse = { items };
+        const payload: CatalogTemplatesResponse = { items: items.map(item => ({ ...item,
+          templateFingerprint: templateFingerprint(item.width, item.height, item.layoutJson),
+          inputs: readTemplateInputs(item.layoutJson) })) };
         console.log("RequestId SUCCESS");
         return jsonResponse(200, payload);
       }
