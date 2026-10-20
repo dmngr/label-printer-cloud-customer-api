@@ -14,7 +14,22 @@ interface Command {
   input: Record<string, unknown>;
 }
 const keyOf = (item: Item): string =>
-  item.GroupId ? item.GroupId.S + "/" + item.ItemKey.S : (item.DeviceCode?.S ?? item.TokenHash?.S ?? item.CounterName?.S ?? item.Id?.N ?? "");
+  item.Pk ? item.Pk.S + "/" + item.Sk.S : item.GroupId ? item.GroupId.S + "/" + item.ItemKey.S : (item.Id?.N ?? item.DeviceCode?.S ?? item.TokenHash?.S ?? item.CounterName?.S ?? "");
+function conditionMatches(input: Record<string, unknown>, current: Item | undefined): boolean {
+  const names = input.ExpressionAttributeNames as Record<string, string> | undefined;
+  const values = input.ExpressionAttributeValues as Item | undefined;
+  return String(input.ConditionExpression).split(" AND ").every(raw => {
+    const clause = raw.replace(/#[a-zA-Z0-9_]+/gu, name => names?.[name] ?? name);
+    const exists = clause.match(/^attribute_(not_)?exists\((\w+)\)$/u);
+    if (exists) return exists[1] ? current?.[exists[2]] === undefined : current?.[exists[2]] !== undefined;
+    const alternatives = clause.match(/^\((\w+) = (:\w+) OR (\w+) = (:\w+)\)$/u);
+    if (alternatives) return JSON.stringify(current?.[alternatives[1]]) === JSON.stringify(values?.[alternatives[2]])
+      || JSON.stringify(current?.[alternatives[3]]) === JSON.stringify(values?.[alternatives[4]]);
+    const equality = clause.match(/^(\w+) = (:\w+)$/u);
+    if (!equality) throw new Error("Unsupported fixture condition: " + clause);
+    return JSON.stringify(current?.[equality[1]]) === JSON.stringify(values?.[equality[2]]);
+  });
+}
 export class FakeDynamo {
   readonly tables = new Map<string, Map<string, Item>>();
   readonly calls: Command[] = [];
@@ -40,8 +55,7 @@ export class FakeDynamo {
         const put = (entry.Put ?? entry.ConditionCheck)!;
         if (put.TableName === this.failTable) throw new Error("mock database unavailable");
         const current = this.table(String(put.TableName)).get(keyOf((put.Item ?? put.Key) as Item));
-        const expected = (put.ExpressionAttributeValues as Item | undefined)?.[":expected"]?.N;
-        if (expected === undefined ? !!current : current?.Version.N !== expected) {
+        if (!conditionMatches(put, current)) {
           throw Object.assign(new Error("stale revision"), {
             name: "TransactionCanceledException",
             CancellationReasons: [{ Code: "ConditionalCheckFailed" }],

@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import type { CustomerApiOptions } from "../config";
 import type { DeviceRecord } from "../types";
 import { PrintRequestError, printIntentFingerprint, type SharedPrintRequest } from "../lib/shared-print-request";
+import { attributeDeliveryWrites } from "../push-delivery";
 type Item = Record<string, { S?: string; N?: string }>;
 interface Sdk {
   DynamoDBClient: new (options: object) => { send(command: unknown): Promise<{ Item?: Item }> };
@@ -84,6 +85,12 @@ export class PrintRequestStore {
       PrintRequestProtocolVersion: { N: "1" },
       DeviceStatusRequestedKey: { S: `Pending#${now}#${String(id).padStart(20, "0")}` },
     };
+    const liveDevice = await client.send(new sdk.GetItemCommand({ TableName: this.options.devicesTableName,
+      Key: { DeviceCode: { S: device.deviceCode } }, ConsistentRead: true }));
+    if (!liveDevice.Item || liveDevice.Item.Group?.S !== device.storeId || liveDevice.Item.StoreCode?.S !== device.storeCode
+      || (liveDevice.Item.InstallationId?.S ?? null) !== device.installationId)
+      throw new PrintRequestError(409, "print_request_destination_conflict");
+    const prepared = attributeDeliveryWrites(command, liveDevice.Item, { devices: this.options.devicesTableName, inbox: this.options.deliveryInboxTableName || "" });
     try {
       await client.send(
         new sdk.TransactWriteItemsCommand({
@@ -95,7 +102,8 @@ export class PrintRequestStore {
                 ConditionExpression: "attribute_not_exists(CounterName)",
               },
             },
-            { Put: { TableName: this.options.deviceCommandsTableName, Item: command, ConditionExpression: "attribute_not_exists(Id)" } },
+            { Put: { TableName: this.options.deviceCommandsTableName, Item: prepared.command, ConditionExpression: "attribute_not_exists(Id)" } },
+            ...prepared.extra,
           ],
         }),
       );

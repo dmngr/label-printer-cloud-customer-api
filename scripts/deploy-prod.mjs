@@ -14,6 +14,7 @@ const HANDLER = "dist/handlers/customer-api.handler";
 const SHARED_ROLE_NAME = "lambda_dynamo_2";
 
 const EXPECTED_ENVIRONMENT = Object.freeze({
+  DM_LABEL_PRINTER_CLOUD_DELIVERY_INBOX_TABLE: "DMLabelPrinterCloudDeliveryInbox",
   DM_LABEL_PRINTER_CLOUD_TEMPLATE_LIBRARY_TABLE: "DMLabelPrinterCloudTemplateLibrary",
   DM_LABEL_PRINTER_CLOUD_DEVICES_TABLE: "DMLabelPrinterCloudDevices",
   DM_LABEL_PRINTER_CLOUD_CUSTOMER_TOKENS_TABLE: "DMLabelPrinterCloudCustomerTokens",

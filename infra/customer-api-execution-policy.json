@@ -2,6 +2,19 @@
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "FenceDeviceDeliveryMode",
+      "Effect": "Allow",
+      "Action": "dynamodb:ConditionCheckItem",
+      "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudDevices",
+      "Condition": { "ForAnyValue:StringEquals": { "dynamodb:EnclosingOperation": ["TransactWriteItems"] } }
+    },
+    {
+      "Sid": "CreateDeliveryInbox",
+      "Effect": "Allow",
+      "Action": "dynamodb:PutItem",
+      "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudDeliveryInbox"
+    },
+    {
       "Sid": "GroupTemplateLibrary",
       "Effect": "Allow",
       "Action": ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem"],

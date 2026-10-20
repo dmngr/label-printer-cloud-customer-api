@@ -15,6 +15,7 @@
 
 import type { CustomerApiOptions } from "../config";
 import { toCatalogProductIdentity, toCatalogTemplateIdentity } from "../lib/catalog-identities";
+import { attributeDeliveryWrites } from "../push-delivery";
 import type {
   CatalogProductItem,
   CatalogProductLookup,
@@ -45,6 +46,7 @@ interface AttributeValue {
 }
 
 interface GetItemInput {
+  ConsistentRead?: boolean;
   TableName: string;
   Key: Record<string, AttributeValue>;
   ProjectionExpression?: string;
@@ -120,6 +122,7 @@ interface DynamoClient {
 }
 
 interface DynamoSdkModule {
+  TransactWriteItemsCommand: DynamoCommandCtor<{ TransactItems: object[] }, Record<string, never>>;
   DynamoDBClient: new (cfg: Record<string, unknown>) => DynamoClient;
   GetItemCommand: DynamoCommandCtor<GetItemInput, GetItemOutput>;
   UpdateItemCommand: DynamoCommandCtor<UpdateItemInput, UpdateItemOutput>;
@@ -131,7 +134,7 @@ interface DynamoSdkModule {
 // The managed Lambda runtime provides AWS SDK v3; keep it out of the bundle.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const sdk: DynamoSdkModule = require("@aws-sdk/client-dynamodb") as DynamoSdkModule;
-const { DynamoDBClient, GetItemCommand, UpdateItemCommand, ScanCommand, QueryCommand, PutItemCommand } = sdk;
+const { DynamoDBClient, GetItemCommand, UpdateItemCommand, ScanCommand, QueryCommand } = sdk;
 
 /**
  * Module-scoped client so successive invocations on a warm container reuse
@@ -548,6 +551,8 @@ export class DynamoCustomerApiStore {
     id: number;
     deviceCode: string;
     storeCode: string;
+    group: string;
+    installationId: string | null;
     commandType: string;
     payloadJson: string;
     requestedBy: string;
@@ -567,12 +572,15 @@ export class DynamoCustomerApiStore {
       DeviceStatusRequestedKey: s(buildDeviceStatusRequestedKey("Pending", input.requestedAtUtc, input.id)),
     };
 
-    await dynamoClient.send(
-      new PutItemCommand({
-        TableName: this.options.deviceCommandsTableName,
-        Item: item,
-      }),
-    );
+    const device = await dynamoClient.send(new GetItemCommand({ TableName: this.options.devicesTableName,
+      Key: { DeviceCode: s(input.deviceCode) }, ConsistentRead: true }));
+    if (!device.Item || device.Item.Group?.S !== input.group || device.Item.StoreCode?.S !== input.storeCode
+      || (device.Item.InstallationId?.S ?? null) !== input.installationId) throw new Error("command_destination_changed");
+    const prepared = attributeDeliveryWrites(item, device.Item, { devices: this.options.devicesTableName, inbox: this.options.deliveryInboxTableName || "" });
+    await dynamoClient.send(new sdk.TransactWriteItemsCommand({ TransactItems: [
+      { Put: { TableName: this.options.deviceCommandsTableName, Item: prepared.command, ConditionExpression: "attribute_not_exists(Id)" } },
+      ...prepared.extra,
+    ] }));
   }
 
   /**

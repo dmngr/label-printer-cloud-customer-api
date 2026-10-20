@@ -3,7 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 test("archive guards can only condition the library table inside a transaction", () => {
   const policy = JSON.parse(fs.readFileSync(new URL("../infra/customer-api-execution-policy.json", import.meta.url)));
-  const grants = policy.Statement.filter(statement => [statement.Action].flat().includes("dynamodb:ConditionCheckItem"));
+  const grants = policy.Statement.filter(statement => [statement.Action].flat().includes("dynamodb:ConditionCheckItem") && [statement.Resource].flat().includes("arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudTemplateLibrary"));
   assert.equal(grants.length, 1);
   assert.equal(grants[0].Effect, "Allow");
   assert.equal(grants[0].Resource, "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudTemplateLibrary");
