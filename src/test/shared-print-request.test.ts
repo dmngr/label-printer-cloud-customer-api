@@ -36,22 +36,20 @@ let fail: "before" | "after" | undefined;
 const originalSend = db.send.bind(db);
 db.send = async command => {
   if (command.kind !== "TransactWriteItemsCommand") return originalSend(command);
-  const entries = command.input.TransactItems as { Put: { TableName: string; Item: Item; ConditionExpression: string } }[];
-  assert.equal(entries.length, 2);
+  const entries = command.input.TransactItems as { Put: { TableName: string; Item: Item; ConditionExpression: string }; ConditionCheck?: { TableName: string; ConditionExpression: string } }[];
+  assert.equal(entries.length, 3);
   assert.equal(entries[0].Put.TableName, counters);
   assert.equal(entries[1].Put.TableName, commands);
   assert.equal(entries[0].Put.ConditionExpression, "attribute_not_exists(CounterName)");
   assert.equal(entries[1].Put.ConditionExpression, "attribute_not_exists(Id)");
+  assert.equal(entries[2].ConditionCheck?.TableName, "DMLabelPrinterCloudDevices");
+  assert.match(entries[2].ConditionCheck!.ConditionExpression, /\battribute_not_exists\(DeliveryMode\)/u);
   if (fail === "before") {
     fail = undefined;
     throw new Error("transport disconnected before commit");
   }
-  // Evaluate BOTH conditions before writing either item, as Dynamo transactions do.
-  for (const { Put: put } of entries) {
-    const key = put.TableName === counters ? put.Item.CounterName.S! : put.Item.Id.N!;
-    if (db.table(put.TableName).has(key)) throw Object.assign(new Error("conditional conflict"), { name: "TransactionCanceledException" });
-  }
-  entries.forEach(({ Put: put }) => db.seed(put.TableName, put.Item));
+  // The transport evaluates every condition before committing any item.
+  await originalSend(command);
   if (fail === "after") {
     fail = undefined;
     throw new Error("transaction response lost after commit");

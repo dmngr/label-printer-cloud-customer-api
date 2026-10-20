@@ -1076,6 +1076,8 @@ async function handleCreateCommand(
     id,
     deviceCode: device.deviceCode,
     storeCode: device.storeCode,
+    group: device.storeId,
+    installationId: device.installationId,
     commandType: parsedBody.commandType,
     payloadJson,
     requestedBy,

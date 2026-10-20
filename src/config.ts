@@ -7,6 +7,7 @@
  */
 
 export interface CustomerApiOptions {
+  deliveryInboxTableName?: string;
   devicesTableName: string;
   templateLibraryTableName: string;
   customerTokensTableName: string;
@@ -57,6 +58,7 @@ function readValue(key: string, fallback: string): string {
 
 export function loadOptions(): CustomerApiOptions {
   return {
+    deliveryInboxTableName: process.env.DM_LABEL_PRINTER_CLOUD_DELIVERY_INBOX_TABLE?.trim() || "",
     templateLibraryTableName: readValue("DM_LABEL_PRINTER_CLOUD_TEMPLATE_LIBRARY_TABLE", "DMLabelPrinterCloudTemplateLibrary"),
     devicesTableName: readValue("DM_LABEL_PRINTER_CLOUD_DEVICES_TABLE", DEFAULT_DEVICES_TABLE),
     customerTokensTableName: readValue("DM_LABEL_PRINTER_CLOUD_CUSTOMER_TOKENS_TABLE", DEFAULT_CUSTOMER_TOKENS_TABLE),

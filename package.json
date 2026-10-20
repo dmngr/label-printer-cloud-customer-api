@@ -1,6 +1,6 @@
 {
   "name": "label-printer-cloud-customer-api",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Authenticated customer catalog, print commands and versioned group template library for app.label.ninja.",
   "main": "dist/handlers/customer-api.js",
   "engines": {
@@ -12,9 +12,9 @@
     "format:check": "type_check_lambdas_v3 format:check",
     "format:fix": "type_check_lambdas_v3 format:fix",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist/test/*.test.js scripts/*.test.mjs",
+    "test": "node scripts/verify-delivery-contract.mjs && npm run build && node --test dist/test/*.test.js scripts/*.test.mjs",
     "deploy:prod": "npm run package:prod && node scripts/deploy-prod.mjs",
-    "deploy:prod:check": "npm run package:prod && node scripts/deploy-prod.mjs --check",
+    "deploy:prod:check": "lambda-upload deploy-prod dm --check --no-fix --assume-runtime nodejs24.x",
     "deploy:prod:upgrade": "npm run deploy:prod",
     "build": "tsc -p tsconfig.json",
     "clean": "rimraf dist",
