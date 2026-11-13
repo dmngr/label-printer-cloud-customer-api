@@ -42,13 +42,17 @@ export async function readPrintImages(
     installationId: device.installationId,
     deviceCode: device.deviceCode,
   };
+  // History sync stores .NET UTC values with an optional Z. Qualify only the
+  // trusted stored value; the shared image contract still validates the date
+  // and requires explicit UTC for caller-supplied upload manifests.
+  const createdAtUtc = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?$/.test(job.createdAtUtc) ? job.createdAtUtc + "Z" : job.createdAtUtc;
   if (!artifactId) {
-    const result = await store.list(scope, job.localJobId, job.createdAtUtc, cursor);
+    const result = await store.list(scope, job.localJobId, createdAtUtc, cursor);
     const response = jsonResponse(200, { ...result, state: result.items.length ? "available" : "unavailable" });
     response.headers = { ...response.headers, "Cache-Control": "private, no-store" };
     return response;
   }
-  const result = await store.get(scope, job.localJobId, job.createdAtUtc, artifactId);
+  const result = await store.get(scope, job.localJobId, createdAtUtc, artifactId);
   return {
     statusCode: 200,
     isBase64Encoded: true,
