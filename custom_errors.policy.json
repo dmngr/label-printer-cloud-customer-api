@@ -4,6 +4,11 @@
     "emit_requestid_success": false
   },
   "errors": {
+    "print_image_invalid": { "emit_requestid_success": false },
+    "print_image_invalid_cursor": { "emit_requestid_success": true },
+    "print_image_job_not_found": { "emit_requestid_success": true },
+    "print_image_unavailable": { "emit_requestid_success": true },
+    "print_images_not_configured": { "emit_requestid_success": true },
     "customer_api_unauthorized": {
       "emit_requestid_success": false,
       "notes": "Authorization header missing or empty (HTTP 401)."

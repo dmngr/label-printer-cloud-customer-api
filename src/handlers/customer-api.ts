@@ -9,6 +9,10 @@
  *   GET /api/v1/me/devices/{deviceCode}/products       -> catalog products mirror
  *   GET /api/v1/me/devices/{deviceCode}/templates      -> catalog templates mirror
  *   GET /api/v1/me/devices/{deviceCode}/jobs?limit=&cursor=  -> recent print jobs (descending)
+ *   GET /api/v1/me/devices/{deviceCode}/jobs/{id}/images -> captured PNG manifests (cursor paging)
+ *   GET /api/v1/me/devices/{deviceCode}/jobs/{id}/images/{artifactId} -> authorized PNG bytes
+ * Image storage is opt-in via DM_LABEL_PRINTER_IMAGE_BUCKET. PNG availability is
+ * separate from job outcome; no request here re-renders or prints an old job.
  *
  * Phase 2 added the read/write `commands` surface (control-plane writes only,
  * status reads only — the device-side `CloudRemoteCommandService` still owns
@@ -75,6 +79,9 @@ import { LibraryError, TemplateLibrary } from "../lib/template-library";
 import { bindTemplateInputs, readTemplateInputs } from "../lib/template-inputs";
 import { DynamoTemplateLibraryTable } from "../storage/template-library-table";
 import { DynamoCustomerApiStore } from "../storage/dynamo-store";
+import { PrintImageStore } from "../storage/print-image-store";
+import { PrintImageError } from "../lib/print-image";
+import { parsePrintImageRoute, readPrintImages } from "../lib/print-image-routes";
 import type {
   CatalogProductsResponse,
   CatalogTemplatesResponse,
@@ -1224,6 +1231,31 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {
       const payload = buildDevicesResponse(auth.caller.storeIds, records, options, nowMs);
       console.log("RequestId SUCCESS");
       return jsonResponse(200, payload);
+    }
+
+    try {
+      const imageRoute = parsePrintImageRoute(rawPath);
+      if (imageRoute) {
+        const authorized = await ensureAuthorizedDevice(store, auth.caller.storeIds, imageRoute.deviceCode);
+        if (authorized.kind === "fail") {
+          logHandledErrorAction(authorized.errorCode, shouldSuppress(authorized.errorCode));
+          return authorized.response;
+        }
+        const response = await readPrintImages(
+          authorized.record,
+          await store.getImageJob(imageRoute.jobId),
+          imageRoute.artifactId,
+          fnEvent.queryStringParameters?.cursor,
+          new PrintImageStore(),
+        );
+        console.log("RequestId SUCCESS");
+        return response;
+      }
+    } catch (error) {
+      if (!(error instanceof PrintImageError)) throw error;
+      logHandledErrorAction(error.code, shouldSuppress(error.code));
+      if (shouldSuppress(error.code)) console.log("RequestId SUCCESS");
+      return jsonResponse(error.status, { error: error.code });
     }
 
     const subroute = tryParseDeviceSubroutePath(rawPath);

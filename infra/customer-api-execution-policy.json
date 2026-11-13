@@ -2,6 +2,25 @@
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "ReadPrintImageJob",
+      "Effect": "Allow",
+      "Action": "dynamodb:GetItem",
+      "Resource": "arn:aws:dynamodb:eu-west-1:787324535455:table/DMLabelPrinterCloudPrintJobs"
+    },
+    {
+      "Sid": "ListPrivateDevImages",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::dm-label-printer-images-dev-787324535455-eu-west-1",
+      "Condition": { "StringLike": { "s3:prefix": "label-images/v1/*" }, "NumericLessThanEquals": { "s3:max-keys": "20" } }
+    },
+    {
+      "Sid": "ReadPrivateDevImages",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::dm-label-printer-images-dev-787324535455-eu-west-1/label-images/v1/*"
+    },
+    {
       "Sid": "FenceDeviceDeliveryMode",
       "Effect": "Allow",
       "Action": "dynamodb:ConditionCheckItem",
