@@ -14,6 +14,7 @@
  */
 
 import type { CustomerApiOptions } from "../config";
+import type { ImageJob } from "../lib/print-image-routes";
 import { toCatalogProductIdentity, toCatalogTemplateIdentity } from "../lib/catalog-identities";
 import { attributeDeliveryWrites } from "../push-delivery";
 import type {
@@ -435,6 +436,19 @@ export class DynamoCustomerApiStore {
     return {
       items,
       nextCursor: response.LastEvaluatedKey,
+    };
+  }
+
+  async getImageJob(id: number): Promise<ImageJob | null> {
+    const result = await dynamoClient.send(
+      new GetItemCommand({ TableName: this.options.printJobsTableName, Key: { Id: { N: String(id) } }, ConsistentRead: true }),
+    );
+    if (!result.Item) return null;
+    return {
+      deviceCode: readString(result.Item, "DeviceCode"),
+      storeCode: readString(result.Item, "StoreCode"),
+      localJobId: readNumber(result.Item, "LocalJobId"),
+      createdAtUtc: readString(result.Item, "LocalCreatedAtUtc"),
     };
   }
 
